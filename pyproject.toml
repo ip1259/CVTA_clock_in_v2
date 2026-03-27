@@ -8,9 +8,11 @@ dependencies = [
     "fastapi>=0.135.2",
     "httpx>=0.28.1",
     "openpyxl>=3.1.5",
+    "pyjwt>=2.12.1",
     "pynput>=1.8.1",
     "pyside6>=6.11.0",
     "pyside6-ds>=4.6",
     "requests>=2.33.0",
     "sqlalchemy>=2.0.48",
+    "uvicorn>=0.42.0",
 ]

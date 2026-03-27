@@ -8,22 +8,31 @@ logger = logging.getLogger(__name__)
 class GlobalCardReader(QObject):
     # 當識別出一串完整的卡號時發送
     card_scanned = Signal(str)
+    # 內部信號：用於安全地跨執行緒啟動計時器
+    _request_timer_start = Signal(int)
 
     def __init__(self, threshold_ms: int = 50):
         super().__init__()
         self.threshold_ms = threshold_ms
         self.key_buffer = []
 
-        # 使用 PySide6 的 QTimer 處理超時判定
+        # 1. 初始化計時器 (此物件屬於建立它的執行緒，通常是主 GUI 執行緒)
         self.timer = QTimer()
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self._on_input_finished)
 
-        # 全域鍵盤監聽器 (pynput)
-        self.listener = keyboard.Listener(on_press=self._on_press)
+        # 2. 綁定內部信號到計時器的 start 方法
+        # 這是關鍵：信號連接到同一個執行緒的物件時，Qt 會自動處理 thread-safe
+        self._request_timer_start.connect(self.timer.start)
+
+        self.listener = None
 
     def start(self):
-        self.listener.start()
+        # pynput 的 Listener 本質是 Thread，一旦停止就必須重新建立實例
+        if self.listener is None or not self.listener.running:
+            self.listener = keyboard.Listener(on_press=self._on_press)
+            self.listener.daemon = True
+            self.listener.start()
         logger.info(f"[Reader] 全域監聽已啟動 (閾值: {self.threshold_ms}ms)")
 
     def stop(self):
@@ -38,17 +47,17 @@ class GlobalCardReader(QObject):
                 char = key.char
             elif key == keyboard.Key.enter:
                 # 有些讀卡機會送 Enter，直接觸發完成
-                self._on_input_finished()
+                self._request_timer_start.emit(0)  # 0ms 代表立即在主執行緒觸發超時
                 return
             else:
                 return
 
             # 每按下一顆鍵，就重新計時
             self.key_buffer.append(char)
-
-            # 使用 QTimer.singleShot 或是透過信號回到主執行緒重置 Timer
-            # 這裡為了簡潔，直接在主執行緒範圍內重置
-            self.timer.start(self.threshold_ms)
+            
+            # 關鍵修正：不直接呼叫 start()，而是 emit 信號
+            # 這會把啟動 Timer 的任務排入主執行緒的事件循環
+            self._request_timer_start.emit(self.threshold_ms)
 
         except Exception as e:
             logger.error(f"監聽按鍵異常: {e}")

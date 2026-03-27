@@ -89,7 +89,7 @@ class ShiftAssignment(Base):
     __tablename__ = "shift_assignments"
     id = Column(Integer, primary_key=True, autoincrement=True)
     employee_id = Column(Integer, ForeignKey("employees.id", ondelete="CASCADE"), nullable=False)
-    schedule_id = Column(Integer, ForeignKey("schedules.id", ondelete="CASCADE"), nullable=False)
+    schedule_id = Column(Integer, ForeignKey("schedules.id", ondelete="CASCADE"), nullable=True)
     date = Column(Date, nullable=False, index=True)
     schedule = relationship("Schedule")
 

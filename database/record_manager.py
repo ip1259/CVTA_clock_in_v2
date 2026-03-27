@@ -50,7 +50,7 @@ class RecordManager:
             session.add(new_record)
             session.commit()
             logger.info(f"UID 打卡成功: {uid} (員工 ID: {card.employee_id}), 時間: {record_time}")
-            return new_record.id
+            return new_record.id, card.owner.name if card.owner else "未知員工"
         except Exception as e:
             session.rollback()
             logger.error(f"UID 打卡寫入失敗: {e}")

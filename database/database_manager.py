@@ -1,10 +1,11 @@
 import os
 import sqlite3
 import logging
+import hashlib
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
-from database.base import Base, Employee, Card, Record, Schedule
+from database.base import Base, Employee, Card, Record, Schedule, Account
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,24 @@ class DatabaseManager:
         """初始化資料庫表結構"""
         Base.metadata.create_all(self.hot_engine)
         logger.info("資料庫結構初始化完成")
+
+        # 檢查並新增預設帳號 (如果目前沒有任何帳號)
+        session = self.HotSession()
+        try:
+            if session.query(Account).count() == 0:
+                default_user = "admin"
+                default_pass = "admin"
+                pwd_hash = hashlib.sha256(default_pass.encode()).hexdigest()
+                
+                new_acc = Account(username=default_user, password_hash=pwd_hash)
+                session.add(new_acc)
+                session.commit()
+                logger.info(f"系統初次建立，已新增預設帳號: {default_user}/{default_pass}")
+        except Exception as e:
+            session.rollback()
+            logger.error(f"建立預設帳號時發生錯誤: {e}")
+        finally:
+            session.close()
 
     def get_session(self, year: int = None):
         """
@@ -61,13 +80,15 @@ class DatabaseManager:
         old_cursor = old_conn.cursor()
 
         try:
-            # A. 初始化預設班表
-            default_schedule = Schedule(
-                name="早班",
-                job_start=datetime.strptime("08:30", "%H:%M").time(),
-                job_end=datetime.strptime("17:30", "%H:%M").time()
-            )
-            session.add(default_schedule)
+            # A. 初始化預設班表 (加入重複檢查)
+            default_schedule = session.query(Schedule).filter_by(name="早班").first()
+            if not default_schedule:
+                default_schedule = Schedule(
+                    name="早班",
+                    job_start=datetime.strptime("08:30", "%H:%M").time(),
+                    job_end=datetime.strptime("17:30", "%H:%M").time()
+                )
+                session.add(default_schedule)
             session.flush()
 
             # B. 遷移 Employees
@@ -92,14 +113,38 @@ class DatabaseManager:
                     uid_to_emp_id[uid] = emp_id
 
             # D. 遷移 Records (修正了原先變數未定義的問題)
+            logger.info("正在遷移打卡紀錄，這可能需要一點時間...")
             old_cursor.execute("SELECT uid, record_time FROM records")
+            
+            record_batch = []
+            batch_size = 1000
+            
             for row in old_cursor.fetchall():
                 uid, r_time = row
                 if uid in uid_to_emp_id:
-                    dt_obj = datetime.fromisoformat(r_time)
+                    # 健壯的日期解析
+                    dt_obj = None
+                    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+                        try:
+                            dt_obj = datetime.strptime(r_time, fmt)
+                            break
+                        except ValueError:
+                            continue
+                    
+                    if not dt_obj:
+                        try: dt_obj = datetime.fromisoformat(r_time)
+                        except: continue
+
                     new_record = Record(
                         uid=uid, employee_id=uid_to_emp_id[uid], record_time=dt_obj)
-                    session.add(new_record)
+                    record_batch.append(new_record)
+                
+                if len(record_batch) >= batch_size:
+                    session.bulk_save_objects(record_batch)
+                    record_batch = []
+
+            if record_batch:
+                session.bulk_save_objects(record_batch)
 
             session.commit()
             logger.info("✅ 遷移完成！")
@@ -154,8 +199,9 @@ class DatabaseManager:
                 CREATE TABLE IF NOT EXISTS cold_db.shift_assignments (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     employee_id INTEGER NOT NULL,
-                    schedule_id INTEGER NOT NULL,
-                    date DATE NOT NULL
+                    schedule_id INTEGER,
+                    date DATE NOT NULL,
+                    UNIQUE(employee_id, date)
                 )
             """)
 
