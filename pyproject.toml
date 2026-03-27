@@ -1,0 +1,16 @@
+[project]
+name = "cvta-clock-in-v2"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.135.2",
+    "httpx>=0.28.1",
+    "openpyxl>=3.1.5",
+    "pynput>=1.8.1",
+    "pyside6>=6.11.0",
+    "pyside6-ds>=4.6",
+    "requests>=2.33.0",
+    "sqlalchemy>=2.0.48",
+]
