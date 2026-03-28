@@ -31,6 +31,7 @@ class Employee(Base):
     cards = relationship("Card", back_populates="owner",
                          cascade="all, delete-orphan")
     records = relationship("Record", back_populates="employee")
+    assignments = relationship("ShiftAssignment", back_populates="employee")
 
 
 class Card(Base):
@@ -92,6 +93,7 @@ class ShiftAssignment(Base):
     schedule_id = Column(Integer, ForeignKey("schedules.id", ondelete="CASCADE"), nullable=True)
     date = Column(Date, nullable=False, index=True)
     schedule = relationship("Schedule")
+    employee = relationship("Employee", back_populates="assignments")
 
     # 複合索引：確保同一個員工在同一天不會有兩個班表
     __table_args__ = (Index('ix_emp_date_shift', 'employee_id', 'date', unique=True),)

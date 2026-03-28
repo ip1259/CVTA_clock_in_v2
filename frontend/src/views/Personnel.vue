@@ -1,5 +1,9 @@
 <template>
   <div class="personnel-view">
+    <div class="page-header">
+      <h2 class="page-title">人事資料管理</h2>
+    </div>
+
     <div class="header-actions">
       <el-button type="primary" @click="openAddDialog">新增員工</el-button>
       <el-checkbox v-model="filterActive" @change="fetchEmployees" style="margin-left: 20px">
@@ -217,6 +221,25 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.page-header {
+  display: flex;
+  align-items: center;
+  padding: 15px 25px;
+  background: linear-gradient(to right, #ffffff, #f0f7ff);
+  border-left: 6px solid #409eff;
+  margin-bottom: 25px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.page-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 800;
+  color: #1f2f3d;
+  letter-spacing: 1px;
+}
+
 .header-actions {
   display: flex;
   align-items: center;

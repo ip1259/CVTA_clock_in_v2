@@ -1,8 +1,12 @@
 <template>
   <div class="shifts-view">
+    <div class="page-header">
+      <h2 class="page-title">員工排班調度系統</h2>
+    </div>
+
     <el-tabs type="border-card">
       <!-- 頁籤一：日曆排班 -->
-      <el-tab-pane label="日曆排班">
+      <el-tab-pane label="個人排班">
         <div class="header-actions">
           <el-form :inline="true">
             <el-form-item label="管理員工">
@@ -31,7 +35,21 @@
           </el-form>
         </div>
 
-        <el-calendar v-if="selectedEmployeeId" v-model="viewDate" v-loading="loading">
+        <el-calendar v-if="selectedEmployeeId" ref="personalCalendar" v-model="viewDate" v-loading="loading">
+          <template #header>
+            <div class="custom-calendar-header">
+              <span class="current-month">{{ formatHeaderDate(viewDate) }}</span>
+              <el-button-group>
+                <el-button size="small" @click="handleCalendarNav('prev-month', 'personal')">
+                  上個月
+                </el-button>
+                <el-button size="small" @click="handleCalendarNav('today', 'personal')">今天</el-button>
+                <el-button size="small" @click="handleCalendarNav('next-month', 'personal')">
+                  下個月
+                </el-button>
+              </el-button-group>
+            </div>
+          </template>
           <template #date-cell="{ data }">
             <div class="calendar-cell" @click="handleDateClick(data.day)">
               <div class="cell-header">
@@ -49,6 +67,119 @@
           </template>
         </el-calendar>
         <el-empty v-else description="請先選擇員工以管理排班" />
+      </el-tab-pane>
+
+      <!-- 頁籤二：總體排班 (批次處理) -->
+      <el-tab-pane label="總體排班">
+        <el-row :gutter="20">
+          <!-- 左側：日曆選擇 -->
+          <el-col :span="10">
+            <div class="total-calendar-wrapper">
+              <el-calendar ref="totalCalendar" v-model="totalViewDate">
+                <template #header>
+                  <div class="custom-calendar-header mini">
+                    <span class="current-month">{{ formatHeaderDate(totalViewDate) }}</span>
+                    <el-button-group>
+                      <el-button size="small" @click="handleCalendarNav('prev-month', 'total')">
+                        上個月
+                      </el-button>
+                      <el-button size="small" @click="handleCalendarNav('today', 'total')">今天</el-button>
+                      <el-button size="small" @click="handleCalendarNav('next-month', 'total')">
+                        下個月
+                      </el-button>
+                    </el-button-group>
+                  </div>
+                </template>
+                <template #date-cell="{ data }">
+                  <div class="calendar-day-cell">
+                    <div class="day-num">{{ data.day.split('-').slice(2).join('') }}</div>
+                    <!-- 假日紅色標籤 (排除六日) -->
+                    <el-tag
+                      v-if="isSpecialHoliday(data.day)"
+                      type="danger"
+                      effect="dark"
+                      size="small"
+                      class="overall-holiday-tag"
+                    >
+                      {{ holidaysSummary[data.day].description }}
+                    </el-tag>
+                    <div class="summary-list">
+                      <el-tag
+                        v-for="(name, idx) in overallSummary[data.day]?.slice(0, 2)"
+                        :key="idx"
+                        size="default"
+                        effect="dark"
+                        class="summary-tag"
+                      >
+                        {{ name }}
+                      </el-tag>
+                      <div v-if="overallSummary[data.day]?.length > 2" class="summary-more">
+                        +{{ overallSummary[data.day].length - 2 }}...
+                      </div>
+                    </div>
+                  </div>
+                </template>
+              </el-calendar>
+            </div>
+          </el-col>
+
+          <!-- 右側：當日排班列表 -->
+          <el-col :span="14">
+            <el-card shadow="never">
+              <template #header>
+                <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+                  <span style="font-weight: bold; color: #409eff;">{{ formatDate(totalViewDate) }} 排班名單</span>
+                  <div style="display: flex; gap: 10px; align-items: center;">
+                    <el-button type="danger" size="small" @click="handleSetAsHoliday" :loading="submitting" plain>設為假日</el-button>
+                    <el-select 
+                      v-model="addEmpId" 
+                      placeholder="新增人員..." 
+                      filterable 
+                      @change="addEmployeeToBatchList"
+                      style="width: 150px"
+                    >
+                      <el-option
+                        v-for="e in employees"
+                        :key="e.id"
+                        :label="e.name"
+                        :value="e.id"
+                        :disabled="isEmployeeInBatchList(e.id)"
+                      />
+                    </el-select>
+                  </div>
+                </div>
+              </template>
+
+              <el-table :data="dayAssignments" border stripe max-height="650">
+                <el-table-column prop="employee_name" label="員工姓名" width="120" />
+                <el-table-column label="預計班別">
+                  <template #default="scope">
+                    <el-select v-model="scope.row.schedule_id" placeholder="預設班別" clearable style="width: 100%">
+                      <el-option
+                        v-for="s in schedules"
+                        :key="s.id"
+                        :label="`${s.name} (${s.start}-${s.end})`"
+                        :value="s.id"
+                      />
+                    </el-select>
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="70" align="center">
+                  <template #default="scope">
+                    <el-button type="danger" icon="Delete" circle size="small" @click="removeEmployeeFromBatchList(scope.$index)" />
+                  </template>
+                </el-table-column>
+              </el-table>
+
+              <div style="margin-top: 20px; text-align: right;">
+                <el-button @click="fetchDaySummary">取消並重設</el-button>
+                <el-button type="primary" :loading="submitting" @click="submitBatchShift">
+                  更新 {{ formatDate(totalViewDate) }} 排班
+                </el-button>
+              </div>
+            </el-card>
+          </el-col>
+        </el-row>
       </el-tab-pane>
 
       <!-- 頁籤二：班表樣板管理 -->
@@ -100,6 +231,43 @@
       </template>
     </el-dialog>
 
+    <!-- 假日同步預覽對話框 -->
+    <el-dialog
+      v-model="syncDialogVisible"
+      title="政府假日同步預覽"
+      width="600px"
+      :close-on-click-modal="false"
+    >
+      <div style="margin-bottom: 15px; color: #666; font-size: 14px;">
+        請勾選欲匯入系統的假日資料。預設已過濾掉標準週休二日。
+      </div>
+      <el-table
+        ref="holidayTableRef"
+        :data="candidates"
+        v-loading="syncLoading"
+        max-height="500"
+        @selection-change="handleSelectionChange"
+      >
+        <el-table-column type="selection" width="55" />
+        <el-table-column prop="date" label="日期" width="120" />
+        <el-table-column prop="description" label="名稱/描述" />
+        <template #empty>
+          <span>無可更新的假日資料</span>
+        </template>
+      </el-table>
+      <template #footer>
+        <el-button @click="syncDialogVisible = false">取消</el-button>
+        <el-button 
+          type="primary" 
+          @click="submitHolidays" 
+          :loading="submitting"
+          :disabled="selectedHolidays.length === 0"
+        >
+          確認匯入 ({{ selectedHolidays.length }} 筆)
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- 修改排班對話框 -->
     <el-dialog v-model="dialogVisible" title="修改排班" width="400px">
       <el-form label-width="80px">
@@ -127,7 +295,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch, nextTick } from 'vue'
+import { ref, onMounted, watch, nextTick, computed } from 'vue'
 import api from '../api'
 import { ElMessage } from 'element-plus'
 
@@ -159,12 +327,53 @@ const editForm = ref({
   scheduleId: null as number | null
 })
 
+// 總體排班相關
+const totalViewDate = ref(new Date())
+const dayAssignments = ref<any[]>([])
+const addEmpId = ref<number | null>(null)
+const personalCalendar = ref<any>(null)
+const totalCalendar = ref<any>(null)
+
+const formatHeaderDate = (date: Date) => {
+  return `${date.getFullYear()} 年 ${String(date.getMonth() + 1).padStart(2, '0')} 月`
+}
+
+const handleCalendarNav = (type: 'prev-month' | 'next-month' | 'today', target: 'personal' | 'total') => {
+  const calendar = target === 'personal' ? personalCalendar.value : totalCalendar.value
+  calendar?.selectDate(type)
+}
+
+const overallSummary = ref<Record<string, string[]>>({})
+const holidaysSummary = ref<Record<string, { description: string, is_workday: boolean }>>({})
+
+const formatDate = (d: Date) => {
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+// 假日同步相關
+const syncDialogVisible = ref(false)
+const syncLoading = ref(false)
+const candidates = ref<any[]>([])
+const selectedHolidays = ref<any[]>([])
+const holidayTableRef = ref<any>(null)
+
 // 樣板管理相關
 const templateDialogVisible = ref(false)
 const templateForm = ref({
   name: '',
   job_start: '',
   job_end: ''
+})
+
+const employeeTransferData = computed(() => {
+  return employees.value.map(e => ({
+    key: e.id,
+    label: e.name + (e.nickname ? ` (${e.nickname})` : ''),
+    disabled: false
+  }))
 })
 
 const fetchEmployees = async () => {
@@ -223,11 +432,140 @@ const submitShift = async () => {
   }
 }
 
-const handleSyncHolidays = async () => {
+const fetchDaySummary = async () => {
+  const dateStr = formatDate(totalViewDate.value)
   try {
-    await api.post('/holidays/sync')
-    ElMessage.info('已發送更新假日請求，請稍候再重新整理。')
+    const { data } = await api.get('/shifts/day-summary', { params: { target_date: dateStr } })
+    dayAssignments.value = data
   } catch (err) {}
+}
+
+const fetchOverallSummary = async () => {
+  const year = totalViewDate.value.getFullYear()
+  const month = totalViewDate.value.getMonth() + 1
+  try {
+    // 同時獲取排班摘要與假日資料
+    const [summaryRes, holidayRes] = await Promise.all([
+      api.get('/shifts/monthly-summary', { params: { year, month } }),
+      api.get('/holidays/monthly', { params: { year, month } })
+    ])
+    overallSummary.value = summaryRes.data
+    holidaysSummary.value = holidayRes.data
+  } catch (err) {}
+}
+
+const isSpecialHoliday = (day: string) => {
+  const h = holidaysSummary.value[day]
+  if (!h || h.is_workday) return false
+  
+  // 檢查是否為平日 (週一至週五)
+  const [y, m, d] = day.split('-').map(Number)
+  const dt = new Date(y, m - 1, d)
+  const dayOfWeek = dt.getDay() // 0 是週日, 6 是週六
+  return dayOfWeek !== 0 && dayOfWeek !== 6
+}
+
+const handleSetAsHoliday = async () => {
+  const dateStr = formatDate(totalViewDate.value)
+  submitting.value = true
+  try {
+    await api.post('/holidays/apply', {
+      holidays: [{
+        date: dateStr,
+        is_workday: false,
+        description: '休假'
+      }]
+    })
+    ElMessage.success(`${dateStr} 已成功設定為假日`)
+    fetchOverallSummary() // 重新整理日曆標記
+  } catch (err) {}
+  finally {
+    submitting.value = false
+  }
+}
+
+const addEmployeeToBatchList = (empId: number) => {
+  const emp = employees.value.find(e => e.id === empId)
+  if (emp) {
+    dayAssignments.value.push({
+      employee_id: emp.id,
+      employee_name: emp.name,
+      schedule_id: emp.schedule_id // 預設帶入該員工的平常班別
+    })
+  }
+  addEmpId.value = null
+}
+
+const isEmployeeInBatchList = (empId: number) => {
+  return dayAssignments.value.some(a => a.employee_id === empId)
+}
+
+const removeEmployeeFromBatchList = (index: number) => {
+  dayAssignments.value.splice(index, 1)
+}
+
+const submitBatchShift = async () => {
+  submitting.value = true
+  try {
+    await api.post('/shifts/batch-assign', {
+      target_date: formatDate(totalViewDate.value),
+      assignments: dayAssignments.value.map(a => ({
+        employee_id: a.employee_id,
+        schedule_id: a.schedule_id
+      }))
+    })
+    ElMessage.success('總體排班更新成功')
+    fetchMonthlyData() // 同步更新個人日曆視圖
+    fetchOverallSummary() // 更新總體摘要
+  } finally {
+    submitting.value = false
+  }
+}
+
+// 監聽總體排班日曆日期變化
+watch(totalViewDate, (newVal, oldVal) => {
+  fetchDaySummary()
+  // 如果月份有變，重新抓取整月摘要
+  if (!oldVal || newVal.getMonth() !== oldVal.getMonth() || newVal.getFullYear() !== oldVal.getFullYear()) {
+    fetchOverallSummary()
+  }
+})
+
+const handleSyncHolidays = async () => {
+  syncDialogVisible.value = true
+  syncLoading.value = true
+  candidates.value = []
+  
+  try {
+    const { data } = await api.get('/holidays/candidates')
+    candidates.value = data
+    
+    // 預設全選
+    await nextTick()
+    if (holidayTableRef.value) {
+      candidates.value.forEach(row => {
+        holidayTableRef.value.toggleRowSelection(row, true)
+      })
+    }
+  } finally {
+    syncLoading.value = false
+  }
+}
+
+const handleSelectionChange = (val: any[]) => {
+  selectedHolidays.value = val
+}
+
+const submitHolidays = async () => {
+  submitting.value = true
+  try {
+    await api.post('/holidays/apply', { holidays: selectedHolidays.value })
+    ElMessage.success('假日資料已成功更新')
+    syncDialogVisible.value = false
+    fetchMonthlyData()
+  } finally {
+    submitting.value = false
+  }
 }
 
 const openTemplateDialog = () => {
@@ -258,7 +596,7 @@ const handleDeleteTemplate = async (id: number) => {
 
 // 監聽日期變化（處理用戶點擊日曆頂部的上一月/下一月）
 watch(viewDate, (newVal, oldVal) => {
-  if (newVal.getMonth() !== oldVal.getMonth() || newVal.getFullYear() !== newVal.getFullYear()) {
+  if (newVal.getMonth() !== oldVal.getMonth() || newVal.getFullYear() !== oldVal.getFullYear()) {
     fetchMonthlyData()
   }
 })
@@ -266,10 +604,29 @@ watch(viewDate, (newVal, oldVal) => {
 onMounted(() => {
   fetchEmployees()
   fetchSchedules()
+  fetchOverallSummary()
 })
 </script>
 
 <style scoped>
+.page-header {
+  display: flex;
+  align-items: center;
+  padding: 15px 25px;
+  background: linear-gradient(to right, #ffffff, #f0f7ff);
+  border-left: 6px solid #409eff;
+  margin-bottom: 25px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.page-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 800;
+  color: #1f2f3d;
+}
+
 .header-actions {
   margin-bottom: 20px;
 }
@@ -302,17 +659,76 @@ onMounted(() => {
   font-size: 13px;
 }
 .holiday-text {
-  color: #909399;
+  color: #ff4747;
   font-size: 12px;
 }
 /* 讓日曆格子點擊區域充滿 */
 :deep(.el-calendar-table .el-calendar-day) {
   padding: 0;
-  height: 80px;
+  height: 110px;
 }
 .calendar-cell {
   padding: 8px;
   width: 100%;
   height: 100%;
+}
+.calendar-day-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+}
+.summary-list {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: center;
+  width: 100%;
+}
+.summary-tag {
+  max-width: 90%;
+  border-radius: 4px;
+  font-weight: bold;
+  margin-bottom: 2px;
+  font-size: 14px;
+  height: 28px;
+}
+.summary-more {
+  font-size: 12px;
+  color: #909399;
+  font-style: italic;
+  margin-top: 2px;
+}
+.overall-holiday-tag {
+  margin-bottom: 4px;
+  font-size: 12px;
+  max-width: 95%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.custom-calendar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 20px;
+  background: linear-gradient(to right, #ecf5ff, #ffffff);
+  border-left: 5px solid #409eff;
+  margin-bottom: 15px;
+  border-radius: 4px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+.current-month {
+  font-size: 22px;
+  font-weight: 800;
+  color: #409eff;
+  letter-spacing: 1px;
+}
+.custom-calendar-header.mini {
+  padding: 8px 15px;
+}
+.custom-calendar-header.mini .current-month {
+  font-size: 18px;
 }
 </style>

@@ -1,5 +1,9 @@
 <template>
   <div class="records-view">
+    <div class="page-header">
+      <h2 class="page-title">考勤報表與系統維護</h2>
+    </div>
+
     <el-tabs type="border-card">
       <!-- 頁籤一：打卡紀錄檢視 -->
       <el-tab-pane label="打卡紀錄檢視">
@@ -200,6 +204,24 @@ onMounted(fetchEmployees)
 </script>
 
 <style scoped>
+.page-header {
+  display: flex;
+  align-items: center;
+  padding: 15px 25px;
+  background: linear-gradient(to right, #ffffff, #fefefe);
+  border-left: 6px solid #67c23a; /* 報表頁改用綠色系 */
+  margin-bottom: 25px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.page-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 800;
+  color: #1f2f3d;
+}
+
 .box-card {
   max-width: 1000px;
   margin: 0 auto;

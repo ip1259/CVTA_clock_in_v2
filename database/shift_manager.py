@@ -4,6 +4,7 @@ import urllib3
 import calendar
 from datetime import datetime, date, time, timedelta
 from sqlalchemy import and_
+from sqlalchemy.orm import joinedload
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 from database.database_manager import db_manager
@@ -119,12 +120,105 @@ class ShiftManager:
         return success
 
     @staticmethod
-    def update_holiday_from_gov():
-        """從政府開放資料同步假日資料 (此處預留介面供 BackgroundTask 呼叫)"""
-        logger.info("假日資料同步任務執行中...")
-        page = 0
-        # 1. 將 Session 提升到迴圈外，複用單一連線
+    def get_day_assignments(target_date: date):
+        """獲取特定日期所有被手動指派的員工及其班表"""
         session = db_manager.get_session()
+        try:
+            assignments = session.query(ShiftAssignment).options(
+                joinedload(ShiftAssignment.employee)
+            ).filter(
+                ShiftAssignment.date == target_date
+            ).all()
+            return [{
+                "employee_id": a.employee_id,
+                "employee_name": a.employee.name,
+                "schedule_id": a.schedule_id
+            } for a in assignments]
+        finally:
+            session.close()
+
+    @staticmethod
+    def get_monthly_summary(year: int, month: int):
+        """獲取特定月份所有員工的排班摘要 (僅包含手動指派)"""
+        session = db_manager.get_session()
+        try:
+            # 計算該月範圍
+            _, last_day = calendar.monthrange(year, month)
+            start_date = date(year, month, 1)
+            end_date = date(year, month, last_day)
+
+            # 抓取該月所有的手動指派紀錄，並預載入員工資料
+            assignments = session.query(ShiftAssignment).options(
+                joinedload(ShiftAssignment.employee)
+            ).filter(
+                and_(
+                    ShiftAssignment.date >= start_date,
+                    ShiftAssignment.date <= end_date
+                )
+            ).all()
+
+            # 依日期群組姓名
+            summary = {}
+            for a in assignments:
+                d_str = a.date.isoformat()
+                if d_str not in summary:
+                    summary[d_str] = []
+                summary[d_str].append(a.employee.name)
+            return summary
+        finally:
+            session.close()
+
+    @staticmethod
+    def get_monthly_holidays(year: int, month: int):
+        """獲取特定月份的假日資料表紀錄摘要"""
+        session = db_manager.get_session()
+        try:
+            _, last_day = calendar.monthrange(year, month)
+            start_date = date(year, month, 1)
+            end_date = date(year, month, last_day)
+            holidays = session.query(Holiday).filter(
+                and_(Holiday.date >= start_date, Holiday.date <= end_date)
+            ).all()
+            # 回傳格式: {"2024-05-01": {"description": "勞動節", "is_workday": False}, ...}
+            return {h.date.isoformat(): {"description": h.description, "is_workday": h.is_workday} for h in holidays}
+        finally:
+            session.close()
+
+    @staticmethod
+    def batch_assign_employees(target_date: date, assignments: list[dict]):
+        """批次更新特定日期的排班名單 (覆蓋式更新)"""
+        session = db_manager.get_session()
+        try:
+            # 1. 先刪除該日期原有的所有手動指派 (為了實現「減少人員」的功能)
+            session.query(ShiftAssignment).filter(
+                ShiftAssignment.date == target_date).delete()
+
+            # 2. 插入新的指派名單
+            for item in assignments:
+                new_assign = ShiftAssignment(
+                    employee_id=item['employee_id'],
+                    schedule_id=item['schedule_id'],
+                    date=target_date
+                )
+                session.add(new_assign)
+
+            session.commit()
+            return True
+        except Exception as e:
+            session.rollback()
+            logger.error(f"批次指派員工失敗: 日期 {target_date}: {e}")
+            return False
+        finally:
+            session.close()
+
+    @staticmethod
+    def fetch_holiday_candidates():
+        """從政府開放資料獲取候選假日清單 (不直接寫入資料庫)"""
+        logger.info("獲取政府假日候選清單中...")
+        page = 0
+        all_candidates = []
+        session = db_manager.get_session()
+
         try:
             while True:
                 url = f"https://data.ntpc.gov.tw/api/datasets/308dcd75-6434-45bc-a95f-584da4fed251/json?page={page}&size=500"
@@ -166,41 +260,62 @@ class ShiftManager:
                     is_std_workday = target_date.weekday() < 5
                     # 過濾條件：非標準工作日或有特殊名稱
                     if (is_workday != is_std_workday) or name:
-                        page_items.append({
+                        all_candidates.append({
                             "date": target_date,
                             "is_workday": is_workday,
                             "description": description
                         })
-
-                if page_items:
-                    # 3. 解決 N+1 問題：一次性查詢本頁所有涉及的日期
-                    page_dates = [x['date'] for x in page_items]
-                    existing_map = {h.date: h for h in session.query(
-                        Holiday).filter(Holiday.date.in_(page_dates)).all()}
-
-                    for pi in page_items:
-                        d = pi['date']
-                        if d in existing_map:
-                            # 更新現有物件
-                            existing_map[d].is_workday = pi['is_workday']
-                            existing_map[d].description = pi['description']
-                        else:
-                            # 新增
-                            session.add(Holiday(
-                                date=d,
-                                is_workday=pi['is_workday'],
-                                description=pi['description']
-                            ))
-                    # 每一頁 commit 一次，兼顧效能與記憶體
-                    session.commit()
-
                 page += 1
+
+            # 過濾掉已經存在於資料庫中的日期，避免前端重複顯示
+            if all_candidates:
+                candidate_dates = [c['date'] for c in all_candidates]
+                existing_dates = session.query(Holiday.date).filter(
+                    Holiday.date.in_(candidate_dates)
+                ).all()
+                # SQLAlchemy 回傳的是 tuple 列表 [(date1,), (date2,)]，需轉為集合加速比對
+                existing_set = {d[0] for d in existing_dates}
+                all_candidates = [
+                    c for c in all_candidates if c['date'] not in existing_set]
+
+            return all_candidates
         except Exception as e:
-            session.rollback()
-            logger.error(f"同步政府假日資料發生非預期錯誤: {e}")
+            logger.error(f"獲取政府假日清單失敗: {e}")
+            return []
         finally:
             session.close()
-        logger.info("假日資料同步任務完成")
+
+    @staticmethod
+    def apply_holidays(holiday_list: list):
+        """將使用者選取的假日清單寫入或更新至資料庫"""
+        session = db_manager.get_session()
+        try:
+            # 批次獲取現有的日期，用於決定是更新還是新增
+            target_dates = [h['date'] for h in holiday_list]
+            existing_map = {h.date: h for h in session.query(Holiday).filter(
+                Holiday.date.in_(target_dates)).all()}
+
+            for item in holiday_list:
+                d = item['date']
+                if d in existing_map:
+                    # 更新現有物件
+                    existing_map[d].is_workday = item['is_workday']
+                    existing_map[d].description = item['description']
+                else:
+                    # 新增
+                    session.add(Holiday(
+                        date=d,
+                        is_workday=item['is_workday'],
+                        description=item['description']
+                    ))
+            session.commit()
+            return True
+        except Exception as e:
+            session.rollback()
+            logger.error(f"儲存假日資料失敗: {e}")
+            return False
+        finally:
+            session.close()
 
     @staticmethod
     def get_employee_shift(employee_id: int, target_date: date):

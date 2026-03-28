@@ -60,6 +60,16 @@ class ShiftAssignRequest(BaseModel):
     target_date: date
 
 
+class BatchAssignmentItem(BaseModel):
+    employee_id: int
+    schedule_id: Optional[int] = None
+
+
+class BatchShiftRequest(BaseModel):
+    assignments: List[BatchAssignmentItem]
+    target_date: date
+
+
 class BulkShiftAssignRequest(BaseModel):
     employee_id: int
     schedule_id: Optional[int] = None
@@ -89,6 +99,16 @@ class CardCreateRequest(BaseModel):
 
 class SystemMigrateRequest(BaseModel):
     old_db_path: str
+
+
+class HolidayItem(BaseModel):
+    date: date
+    is_workday: bool
+    description: str
+
+
+class HolidayApplyRequest(BaseModel):
+    holidays: List[HolidayItem]
 
 # ── JWT Security Setup ────────────────────────────────────────
 
@@ -189,9 +209,9 @@ async def get_records(
 async def get_employees(active_only: bool = True, _=Depends(verify_token)):
     emps = HRManager.get_all_employees(only_active=active_only)
     return [{
-        "id": e.id, 
-        "name": e.name, 
-        "nickname": e.nickname, 
+        "id": e.id,
+        "name": e.name,
+        "nickname": e.nickname,
         "is_active": e.is_active,
         "schedule_id": e.schedule_id
     } for e in emps]
@@ -265,6 +285,33 @@ async def assign_shift(req: ShiftAssignRequest, _=Depends(verify_token)):
     return {"status": "ok"}
 
 
+@app.get("/api/v1/shifts/day-summary")
+async def get_day_summary(target_date: date, _=Depends(verify_token)):
+    """獲取特定日期的所有排班人員清單"""
+    return ShiftManager.get_day_assignments(target_date)
+
+
+@app.get("/api/v1/shifts/monthly-summary")
+async def get_overall_monthly_summary(year: int, month: int, _=Depends(verify_token)):
+    """獲取單月所有員工的排班摘要，供總體排班日曆使用"""
+    return ShiftManager.get_monthly_summary(year, month)
+
+
+@app.get("/api/v1/holidays/monthly")
+async def get_monthly_holidays(year: int, month: int, _=Depends(verify_token)):
+    """獲取單月的所有假日設定，供總體排班日曆顯示"""
+    return ShiftManager.get_monthly_holidays(year, month)
+
+
+@app.post("/api/v1/shifts/batch-assign")
+async def batch_assign_shifts(req: BatchShiftRequest, _=Depends(verify_token)):
+    success = ShiftManager.batch_assign_employees(
+        req.target_date, [item.dict() for item in req.assignments])
+    if not success:
+        raise HTTPException(status_code=500, detail="Batch assignment failed")
+    return {"status": "ok"}
+
+
 @app.post("/api/v1/shifts/bulk-assign")
 async def bulk_assign_shifts(req: BulkShiftAssignRequest, _=Depends(verify_token)):
     success = ShiftManager.bulk_assign_shifts(
@@ -311,11 +358,19 @@ async def get_monthly_calendar(employee_id: int, year: int, month: int, _=Depend
 # 4. 假日管理 (政府資料同步)
 
 
-@app.post("/api/v1/holidays/sync")
-async def sync_holidays(background_tasks: BackgroundTasks, _=Depends(verify_token)):
-    # 由於政府 API 同步較慢，放入背景執行
-    background_tasks.add_task(ShiftManager.update_holiday_from_gov)
-    return {"status": "sync_started"}
+@app.get("/api/v1/holidays/candidates", response_model=List[HolidayItem])
+async def get_holiday_candidates(_=Depends(verify_token)):
+    """獲取政府假日候選清單供前端選擇"""
+    return ShiftManager.fetch_holiday_candidates()
+
+
+@app.post("/api/v1/holidays/apply")
+async def apply_holidays(req: HolidayApplyRequest, _=Depends(verify_token)):
+    """儲存使用者勾選的假日資料"""
+    success = ShiftManager.apply_holidays([h.model_dump() for h in req.holidays])
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save holidays")
+    return {"status": "ok"}
 
 # 5. 報表匯出
 
@@ -394,8 +449,8 @@ async def get_all_cards(_=Depends(verify_token)):
     cards = HRManager.get_all_cards()
     return [
         {
-            "id": c.id, 
-            "uid": c.uid, 
+            "id": c.id,
+            "uid": c.uid,
             "employee_id": c.employee_id,
             "owner_name": c.owner.name if c.owner else None
         } for c in cards
@@ -435,12 +490,13 @@ async def add_empty_card(req: CardCreateRequest, _=Depends(verify_token)):
 
 # ── 系統維護 ──────────────────────────────────────────────────
 
+
 @app.post("/api/v1/system/migrate")
 async def migrate_database(req: SystemMigrateRequest, _=Depends(verify_token)):
     """從舊版資料庫遷移資料"""
     if not os.path.exists(req.old_db_path):
         raise HTTPException(status_code=404, detail="找不到指定的舊資料庫檔案路徑")
-    
+
     try:
         db_manager.migrate_from_old_db(req.old_db_path)
         return {"status": "ok", "message": "資料遷移完成"}
@@ -479,5 +535,8 @@ else:
 
 if __name__ == "__main__":
     import uvicorn
+    # 從環境變數讀取伺服器設定，若無則使用預設值
+    host = os.getenv("CVTA_API_HOST", "0.0.0.0")
+    port = int(os.getenv("CVTA_API_PORT", 16688))
     # 啟動時建議使用 --proxy-headers 如果放在 Nginx 後面
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=host, port=port)

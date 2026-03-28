@@ -1,4 +1,5 @@
 import sys
+import os
 import httpx
 import logging
 from log_config import setup_logging
@@ -65,9 +66,12 @@ class LoginDialog(QDialog):
 
 
 class PunchClient(QMainWindow):
-    API_URL = "http://127.0.0.1:8000/api/v1/punch"
-    ADD_CARD_URL = "http://127.0.0.1:8000/api/v1/cards/empty"
-    LOGIN_URL = "http://127.0.0.1:8000/api/v1/login"
+    # 從環境變數讀取 API 基礎路徑，並動態生成子路徑
+    _BASE_URL = os.getenv("CVTA_API_BASE_URL",
+                          "http://127.0.0.1:8000").rstrip("/")
+    API_URL = f"{_BASE_URL}/api/v1/punch"
+    ADD_CARD_URL = f"{_BASE_URL}/api/v1/cards/empty"
+    LOGIN_URL = f"{_BASE_URL}/api/v1/login"
 
     def __init__(self):
         super().__init__()
@@ -201,7 +205,7 @@ class PunchClient(QMainWindow):
 
     def _on_card_scanned(self, uid: str):
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
+
         if self._reader_suspended:
             logger.info(f"[UI] 讀卡器已暫停，忽略卡號: {uid}")
             return

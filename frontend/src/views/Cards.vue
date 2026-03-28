@@ -1,8 +1,8 @@
 <template>
   <div class="cards-view">
-    <div class="header-actions">
-      <h2>卡片清單</h2>
-      <el-button @click="fetchCards" :loading="loading" circle icon="Refresh" style="margin-left: 15px" />
+    <div class="page-header">
+      <h2 class="page-title">卡片管理系統</h2>
+      <el-button @click="fetchCards" :loading="loading" circle icon="Refresh" type="primary" plain />
     </div>
 
     <el-table :data="cards" v-loading="loading" style="width: 100%; margin-top: 20px" border>
@@ -72,7 +72,7 @@ const handleUnbind = async (row: Card) => {
     ElMessage.success('已成功解除綁定')
     fetchCards()
   } catch (err) {
-    if (err !== 'cancel') logger.error(err)
+    if (err !== 'cancel') console.error(err)
   }
 }
 
@@ -92,11 +92,23 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.header-actions {
+.page-header {
   display: flex;
+  justify-content: space-between;
   align-items: center;
+  padding: 15px 25px;
+  background: linear-gradient(to right, #ffffff, #f0f7ff);
+  border-left: 6px solid #409eff;
+  margin-bottom: 25px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
 }
-h2 {
+
+.page-title {
   margin: 0;
+  font-size: 24px;
+  font-weight: 800;
+  color: #1f2f3d;
+  letter-spacing: 1px;
 }
 </style>
