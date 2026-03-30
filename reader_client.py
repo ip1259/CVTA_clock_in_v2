@@ -87,7 +87,7 @@ class PunchClient(QMainWindow):
         # 1. 初始化元件
         self.worker_manager = WorkerManager(self)
         self.offline_mgr = OfflineManager()
-        self.reader = GlobalCardReader(threshold_ms=1000)
+        self.reader = GlobalCardReader(threshold_ms=50)
 
         # 2. 綁定硬體信號 (強制 QueuedConnection 以解決執行緒衝突問題)
         self.reader.card_scanned.connect(
