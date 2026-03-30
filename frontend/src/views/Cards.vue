@@ -2,7 +2,7 @@
   <div class="cards-view">
     <div class="page-header">
       <h2 class="page-title">卡片管理系統</h2>
-      <el-button @click="fetchCards" :loading="loading" circle icon="Refresh" type="primary" plain />
+      <el-button @click="fetchCards" :loading="loading" circle :icon="Refresh" type="primary" plain />
     </div>
 
     <el-table :data="cards" v-loading="loading" style="width: 100%; margin-top: 20px" border>

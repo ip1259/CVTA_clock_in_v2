@@ -120,11 +120,10 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import api from '../api'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 
 const employees = ref<any[]>([])
 const exporting = ref(false)
-const migrating = ref(false)
 const querying = ref(false)
 const recordData = ref([])
 

@@ -25,10 +25,10 @@
               </el-select>
             </el-form-item>
             <el-form-item>
-              <el-button type="primary" plain icon="Refresh" @click="fetchMonthlyData" :disabled="!selectedEmployeeId">
+              <el-button type="primary" plain :icon="Refresh" @click="fetchMonthlyData" :disabled="!selectedEmployeeId">
                 重新整理
               </el-button>
-              <el-button type="warning" plain icon="Calendar" @click="handleSyncHolidays">
+              <el-button type="warning" plain :icon="Calendar" @click="handleSyncHolidays">
                 手動更新假日資料
               </el-button>
             </el-form-item>
@@ -60,20 +60,20 @@
               <div v-if="getShift(data.day)" class="shift-content">
                 <!-- 班別標籤 -->
                 <el-tag
-                  v-if="getShift(data.day).schedule"
+                  v-if="getShift(data.day)?.schedule"
                   effect="dark"
                   size="default"
                   class="shift-tag"
                 >
-                  {{ getShift(data.day).schedule.name }}
+                  {{ getShift(data.day)?.schedule?.name }}
                 </el-tag>
                 <!-- 休假/請假標籤 -->
                 <el-tag
                   v-else
-                  :type="getShift(data.day).is_leave ? 'danger' : 'info'"
+                  :type="getShift(data.day)?.is_leave ? 'danger' : 'info'"
                   effect="plain"
                 >
-                  {{ getShift(data.day).is_leave ? '請假/排休' : '休假' }}
+                  {{ getShift(data.day)?.is_leave ? '請假/排休' : '休假' }}
                 </el-tag>
               </div>
             </div>
@@ -224,7 +224,7 @@
       <!-- 頁籤二：班表樣板管理 -->
       <el-tab-pane label="樣板管理">
         <div class="header-actions">
-          <el-button type="primary" icon="Plus" @click="openTemplateDialog">新增班表樣板</el-button>
+          <el-button type="primary" :icon="Plus" @click="openTemplateDialog">新增班表樣板</el-button>
         </div>
         <el-table :data="schedules" border style="margin-top: 20px">
           <el-table-column prop="name" label="班表名稱" />
@@ -234,7 +234,7 @@
             <template #default="scope">
               <el-popconfirm title="確定要刪除此樣板嗎？" @confirm="handleDeleteTemplate(scope.row.id)">
                 <template #reference>
-                  <el-button type="danger" size="small" icon="Delete" circle />
+                  <el-button type="danger" size="small" :icon="Delete" circle />
                 </template>
               </el-popconfirm>
             </template>
@@ -337,6 +337,7 @@
 import { ref, onMounted, watch, nextTick, computed } from 'vue'
 import api from '../api'
 import { ElMessage } from 'element-plus'
+import { Refresh, Calendar, Plus, Delete} from '@element-plus/icons-vue'
 
 interface ShiftDay {
   date: string
@@ -405,14 +406,6 @@ const templateForm = ref({
   name: '',
   job_start: '',
   job_end: ''
-})
-
-const employeeTransferData = computed(() => {
-  return employees.value.map(e => ({
-    key: e.id,
-    label: e.name + (e.nickname ? ` (${e.nickname})` : ''),
-    disabled: false
-  }))
 })
 
 const fetchEmployees = async () => {

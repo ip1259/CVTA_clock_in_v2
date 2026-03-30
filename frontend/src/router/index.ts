@@ -20,7 +20,7 @@ const router = createRouter({
 })
 
 // 簡單的路由守衛
-router.beforeEach((to, from, next) => {
+router.beforeEach((to, _from, next) => {
     const isAuthenticated = !!localStorage.getItem('token')
     if (to.path !== '/login' && !isAuthenticated) {
         next('/login')
