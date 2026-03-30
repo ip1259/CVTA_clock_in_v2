@@ -125,6 +125,15 @@ class HRManager:
     # ── 管理員帳號管理 (人事權限相關) ──────────────────────────────
 
     @staticmethod
+    def get_all_accounts():
+        """獲取所有管理員帳號"""
+        session = db_manager.get_session()
+        try:
+            return session.query(Account).all()
+        finally:
+            session.close()
+
+    @staticmethod
     def _hash_password(password: str) -> str:
         """內部方法：密碼加密邏輯 (SHA256)"""
         # 在實際生產環境建議使用 werkzeug.security 或 passlib

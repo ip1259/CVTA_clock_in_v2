@@ -13,6 +13,7 @@ const router = createRouter({
                 { path: 'cards', name: 'Cards', component: () => import('../views/Cards.vue') },
                 { path: 'shifts', name: 'Shifts', component: () => import('../views/Shifts.vue') },
                 { path: 'records', name: 'Records', component: () => import('../views/Records.vue') },
+                { path: 'system', name: 'System', component: () => import('../views/System.vue') },
             ]
         }
     ]

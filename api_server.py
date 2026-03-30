@@ -97,6 +97,12 @@ class CardCreateRequest(BaseModel):
     uid: str
 
 
+class ManualRecordRequest(BaseModel):
+    employee_id: int
+    record_time: datetime
+    note: str
+
+
 class SystemMigrateRequest(BaseModel):
     old_db_path: str
 
@@ -198,7 +204,8 @@ async def get_records(
         {
             "id": r.id,
             "uid": r.uid,
-            "record_time": r.record_time.strftime("%Y-%m-%d %H:%M:%S")
+            "record_time": r.record_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "note": r.note
         } for r in records
     ]
 
@@ -400,6 +407,13 @@ async def download_attendance(
 
 # 6. 帳號管理 (管理員權限)
 
+@app.get("/api/v1/accounts")
+async def get_accounts(_=Depends(verify_token)):
+    """獲取系統中所有管理員帳號"""
+    accs = HRManager.get_all_accounts()
+    return [{"id": a.id, "username": a.username} for a in accs]
+
+
 @app.post("/api/v1/login")
 async def login(req: LoginRequest):
     """管理員登入驗證"""
@@ -502,6 +516,16 @@ async def migrate_database(req: SystemMigrateRequest, _=Depends(verify_token)):
         return {"status": "ok", "message": "資料遷移完成"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"遷移過程發生錯誤: {str(e)}")
+
+
+@app.post("/api/v1/records/manual")
+async def add_manual_record(req: ManualRecordRequest, _=Depends(verify_token)):
+    """管理員手動補錄打卡紀錄"""
+    res = RecordManager.add_manual_record(req.employee_id, req.record_time, req.note)
+    if res:
+        return {"status": "ok", "record_id": res}
+    raise HTTPException(status_code=500, detail="Failed to add manual record")
+
 
 # ── 前端 SPA 支援 ─────────────────────────────────────────────
 

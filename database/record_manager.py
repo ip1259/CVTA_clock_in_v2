@@ -59,7 +59,7 @@ class RecordManager:
             session.close()
 
     @staticmethod
-    def add_manual_record(employee_id: int, record_time: datetime, uid: str = None):
+    def add_manual_record(employee_id: int, record_time: datetime, note: str = None, uid: str = None):
         """
         手動補錄打卡紀錄（例如員工忘記帶卡）
         """
@@ -76,7 +76,8 @@ class RecordManager:
             new_record = Record(
                 employee_id=employee_id,
                 record_time=record_time,
-                uid=uid
+                uid=uid or "MANUAL_ENTRY",
+                note=note
             )
             session.add(new_record)
             session.commit()

@@ -57,6 +57,7 @@ class Record(Base):
     # 關鍵優化：為時間加上索引，加速「冷熱邊界」的搜尋與搬運
     record_time = Column(DateTime, default=datetime.now,
                          nullable=False, index=True)
+    note = Column(String(255))  # 新增：儲存備註或手動打卡事由
 
     employee = relationship("Employee", back_populates="records")
 

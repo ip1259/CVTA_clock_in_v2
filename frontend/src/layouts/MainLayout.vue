@@ -7,6 +7,7 @@
         <el-menu-item index="/cards">卡片管理</el-menu-item>
         <el-menu-item index="/shifts">排班管理</el-menu-item>
         <el-menu-item index="/records">考勤報表</el-menu-item>
+        <el-menu-item index="/system">系統管理</el-menu-item>
         <el-divider />
         <el-menu-item @click="handleLogout">登出</el-menu-item>
       </el-menu>
