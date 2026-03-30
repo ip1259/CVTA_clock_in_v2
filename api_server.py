@@ -527,6 +527,39 @@ async def add_manual_record(req: ManualRecordRequest, _=Depends(verify_token)):
     raise HTTPException(status_code=500, detail="Failed to add manual record")
 
 
+@app.get("/api/v1/dashboard/summary")
+async def get_dashboard_summary(_=Depends(verify_token)):
+    """獲取儀表板所需的統計數據與動態"""
+    # 1. 獲取員工與卡片統計
+    all_emps = HRManager.get_all_employees(only_active=False)
+    active_count = len([e for e in all_emps if e.is_active])
+    unassigned_cards = HRManager.get_unassigned_cards()
+
+    # 2. 獲取今日打卡總數
+    today_start = datetime.combine(date.today(), time.min)
+    today_end = datetime.combine(date.today(), time.max)
+    today_count = RecordManager.get_count_in_range(today_start, today_end)
+
+    # 3. 獲取最近 10 筆動態
+    recent = RecordManager.get_recent_records(10)
+
+    return {
+        "stats": {
+            "total_employees": len(all_emps),
+            "active_employees": active_count,
+            "unassigned_cards": len(unassigned_cards),
+            "today_punches": today_count
+        },
+        "activities": [
+            {
+                "name": r.employee.name if r.employee else "未知",
+                "time": r.record_time.strftime("%Y-%m-%d %H:%M:%S"),
+                "note": r.note or "正常刷卡"
+            } for r in recent
+        ]
+    }
+
+
 # ── 前端 SPA 支援 ─────────────────────────────────────────────
 
 # 假設 Vue build 完的檔案放在 'dist' 資料夾

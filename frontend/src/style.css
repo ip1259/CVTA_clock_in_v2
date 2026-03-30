@@ -1,15 +1,25 @@
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
+  --text: #2C3639;
+  --text-h: #2C3639;
+  --bg: #DCD7C9;
+  --border: #3F4E4F;
   --code-bg: #f4f3ec;
-  --accent: #aa3bff;
+  --accent: #A27B5C;
   --accent-bg: rgba(170, 59, 255, 0.1);
   --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
+  --social-bg: #3F4E4F;
   --shadow:
     rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+
+  /* 覆蓋 Element Plus 主要色調 */
+  --el-color-primary: #A27B5C;
+  --el-color-primary-light-3: #bd9c82;
+  --el-color-primary-light-5: #cfb29d;
+  --el-color-primary-light-7: #e1ccb9;
+  --el-color-primary-light-8: #ebdbca;
+  --el-color-primary-light-9: #f5ebdb;
+  --el-color-primary-dark-2: #82624a;
+  --el-bg-color-page: #DCD7C9;
 
   --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
   --heading: system-ui, 'Segoe UI', Roboto, sans-serif;

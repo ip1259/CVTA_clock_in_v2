@@ -1,0 +1,74 @@
+// Only variables and forwards here. No actual CSS output.
+@forward 'element-plus/theme-chalk/src/common/var.scss' with (
+  $colors: (
+    'primary': (
+      'base': #a39485, // 降低飽和度的莫蘭迪棕
+      'light-3': #bfb5ab,
+      'light-5': #d1c9c1,
+      'light-7': #e3ddd8,
+      'light-8': #ede9e5,
+      'light-9': #f4f1ef,
+      'dark-2': #8a7d70,
+    ),
+    'success': (
+      'base': #52c41a,
+    ),
+    'danger': (
+      'base': #c07c7c, // 莫蘭迪紅，低飽和度
+    ),
+  ),
+  // 文字顏色：讓文字帶一點深咖啡色調，比純黑更柔和
+  $text-color: (
+    'primary': #4a443d, // 減少黃感，增加深灰感
+    'regular': #6b655e,
+    'secondary': #8c857e,
+    'placeholder': #b5afa9,
+  ),
+  // 邊框顏色：改為暖灰色，避免預設的冷灰色
+  $border-color: (
+    'base': #dcd8d3,
+    'light': #e6e2de,
+    'lighter': #f0ede9,
+    'extra-light': #f7f5f2,
+  ),
+  // 填充顏色：用於禁用狀態或背景填充
+  $fill-color: (
+    'base': #f0ede9,
+    'light': #f7f5f2,
+    'lighter': #faf9f7,
+    'blank': #ffffff, // 輸入元件背景改為純白，提升可編輯感
+  ),
+  // 加入背景色定義
+  $bg-color: (
+    'page': #f0ede9, // 頁面底色調淺，更乾淨
+    'base': #ffffff, // 元件基礎背景改為純白
+    'overlay': #ffffff, // 彈窗保持純白，增加對比
+  ),
+  // 元件特定調整
+  $button: (
+    'bg-color': #ffffff,
+  ),
+  $input: (
+    'bg-color': #ffffff,
+  ),
+  $card: (
+    'bg-color': #ffffff,
+    'border-color': #dcd8d3,
+  ),
+  // 側邊欄/選單調整
+  $menu: (
+    'bg-color': #ffffff,
+    'item-hover-fill': #f0ede9,
+    'active-color': #a39485,
+  ),
+  // 表格元件背景設定
+  $table: (
+    'bg-color': #ffffff,
+    'tr-bg-color': #ffffff,
+    'header-bg-color': #faf9f8, // 表頭保留極淺的灰褐色以利區分
+  ),
+  // 日曆元件背景設定
+  $calendar: (
+    'bg-color': #ffffff,
+  ),
+);

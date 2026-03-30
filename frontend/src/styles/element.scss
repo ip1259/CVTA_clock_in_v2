@@ -1,0 +1,28 @@
+// 1. Import the variables
+@use "./variables.scss" as *;
+
+// 2. Import the full Element Plus styles (only once)
+@use "element-plus/theme-chalk/src/index.scss" as *;
+
+// 將 Element Plus 的背景變數套用到全局
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  // 使用我們剛剛定義的 page 背景色
+  background-color: var(--el-bg-color-page);
+  // 也可以順便確保文字顏色符合主題
+  color: var(--el-text-color-primary);
+}
+
+// 確保頁面標題與各級標題標籤套用主題文字顏色
+h1, h2, h3, h4, h5, h6,
+.page-title,
+.page-header,
+.el-page-header__content,
+.el-card__header,
+.title {
+  // 使用 !important 確保覆蓋 Scoped CSS 或瀏覽器預設樣式
+  color: var(--el-text-color-primary) !important;
+  margin-top: 0;
+}

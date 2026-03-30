@@ -1,6 +1,6 @@
 import { createApp } from 'vue'
 import ElementPlus from 'element-plus'
-import 'element-plus/dist/index.css'
+import './styles/element.scss' // 改為引入自定義的 SCSS
 import App from './App.vue'
 import router from './router'
 

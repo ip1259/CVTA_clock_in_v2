@@ -250,8 +250,8 @@ onMounted(fetchEmployees)
   display: flex;
   align-items: center;
   padding: 15px 25px;
-  background: linear-gradient(to right, #ffffff, #fefefe);
-  border-left: 6px solid #67c23a; /* 報表頁改用綠色系 */
+  background: linear-gradient(to right, #ffffff, #ede9e1);
+  border-left: 6px solid #A27B5C;
   margin-bottom: 25px;
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);

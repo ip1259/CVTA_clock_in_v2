@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime
 from sqlalchemy import and_
+from sqlalchemy.orm import joinedload
 from database.database_manager import db_manager
 from database.base import Record, Employee, Card
 
@@ -25,6 +26,31 @@ class RecordManager:
                 )
             ).order_by(Record.record_time.asc()).all()
             return records
+        finally:
+            session.close()
+
+    @staticmethod
+    def get_recent_records(limit: int = 10):
+        """獲取全系統最近的打卡動態 (包含員工姓名)"""
+        session = db_manager.get_session()
+        try:
+            return session.query(Record).options(
+                joinedload(Record.employee)
+            ).order_by(Record.record_time.desc()).limit(limit).all()
+        finally:
+            session.close()
+
+    @staticmethod
+    def get_count_in_range(start_time: datetime, end_time: datetime):
+        """計算特定時間範圍內的打卡總數"""
+        session = db_manager.get_session()
+        try:
+            return session.query(Record).filter(
+                and_(
+                    Record.record_time >= start_time,
+                    Record.record_time <= end_time
+                )
+            ).count()
         finally:
             session.close()
 

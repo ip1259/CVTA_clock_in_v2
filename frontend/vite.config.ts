@@ -7,6 +7,14 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [vue()],
+    css: {
+      preprocessorOptions: {
+        scss: {
+          // Point to variables.scss and fix the typo (@/ instead of @./)
+          additionalData: `@use "@/styles/variables.scss" as *;`,
+        },
+      },
+    },
     server: {
       proxy: {
         '/api': {
@@ -14,6 +22,11 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
         }
       }
+    },
+    resolve: {
+      alias: {
+        '@': '/src',
+      },
     },
     build: {
       outDir: '../dist',

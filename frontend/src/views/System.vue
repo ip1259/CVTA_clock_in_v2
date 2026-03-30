@@ -181,8 +181,8 @@ onMounted(fetchAccounts)
 <style scoped>
 .page-header {
   padding: 15px 25px;
-  background: linear-gradient(to right, #ffffff, #fff5f5);
-  border-left: 6px solid #f56c6c;
+  background: linear-gradient(to right, #ffffff, #ede9e1);
+  border-left: 6px solid #A27B5C;
   margin-bottom: 25px;
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);

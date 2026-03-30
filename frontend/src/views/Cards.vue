@@ -97,8 +97,8 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   padding: 15px 25px;
-  background: linear-gradient(to right, #ffffff, #f0f7ff);
-  border-left: 6px solid #409eff;
+  background: linear-gradient(to right, #ffffff, #ede9e1);
+  border-left: 6px solid #A27B5C;
   margin-bottom: 25px;
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
@@ -108,7 +108,7 @@ onMounted(() => {
   margin: 0;
   font-size: 24px;
   font-weight: 800;
-  color: #1f2f3d;
+  color: var(--el-text-color-primary);
   letter-spacing: 1px;
 }
 </style>

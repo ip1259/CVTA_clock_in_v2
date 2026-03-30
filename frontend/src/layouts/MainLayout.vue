@@ -1,7 +1,14 @@
 <template>
   <el-container class="layout-container">
     <el-aside width="200px">
-      <el-menu :router="true" :default-active="$route.path" class="el-menu-vertical">
+      <el-menu 
+        :router="true" 
+        :default-active="$route.path" 
+        class="el-menu-vertical"
+        background-color="#2C3639"
+        text-color="#DCD7C9"
+        active-text-color="#A27B5C"
+      >
         <el-menu-item index="/">儀表板</el-menu-item>
         <el-menu-item index="/personnel">人事管理</el-menu-item>
         <el-menu-item index="/cards">卡片管理</el-menu-item>
@@ -16,7 +23,7 @@
       <el-header class="header">
         <span>CVTA 後台管理介面</span>
       </el-header>
-      <el-main>
+      <el-main style="background-color: var(--bg);">
         <router-view />
       </el-main>
     </el-container>
@@ -43,10 +50,11 @@ const handleLogout = () => {
 }
 .el-menu-vertical {
   height: 100%;
+  border-right: none;
 }
 .header {
-  background-color: #fff;
-  color: #333;
+  background-color: #3F4E4F;
+  color: #DCD7C9;
   line-height: 60px;
   border-bottom: 1px solid #dcdfe6;
   text-align: right;

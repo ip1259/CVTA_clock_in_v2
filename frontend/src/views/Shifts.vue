@@ -58,10 +58,23 @@
                 <el-tag v-else-if="getShift(data.day)?.is_manual" size="small" type="warning" effect="plain" class="manual-tag">手動</el-tag>
               </div>
               <div v-if="getShift(data.day)" class="shift-content">
-                <span v-if="getShift(data.day).schedule" class="shift-name">
+                <!-- 班別標籤 -->
+                <el-tag
+                  v-if="getShift(data.day).schedule"
+                  effect="dark"
+                  size="default"
+                  class="shift-tag"
+                >
                   {{ getShift(data.day).schedule.name }}
-                </span>
-                <span v-else class="holiday-text">{{ getShift(data.day).is_leave ? '請假/排休' : '休假' }}</span>
+                </el-tag>
+                <!-- 休假/請假標籤 -->
+                <el-tag
+                  v-else
+                  :type="getShift(data.day).is_leave ? 'danger' : 'info'"
+                  effect="plain"
+                >
+                  {{ getShift(data.day).is_leave ? '請假/排休' : '休假' }}
+                </el-tag>
               </div>
             </div>
           </template>
@@ -128,9 +141,35 @@
             <el-card shadow="never">
               <template #header>
                 <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
-                  <span style="font-weight: bold; color: #409eff;">{{ formatDate(totalViewDate) }} 排班名單</span>
+                  <div style="display: flex; align-items: center;">
+                    <span style="font-weight: bold; color: var(--el-color-primary);">{{ formatDate(totalViewDate) }} 排班名單</span>
+                    <!-- 顯示當日假日詳細資訊 -->
+                    <el-tooltip
+                      v-if="holidaysSummary[formatDate(totalViewDate)] && !holidaysSummary[formatDate(totalViewDate)].is_workday"
+                      :content="holidaysSummary[formatDate(totalViewDate)].description"
+                      placement="top"
+                      :disabled="holidaysSummary[formatDate(totalViewDate)].description.length < 10"
+                    >
+                      <el-tag
+                        type="danger"
+                        size="small"
+                        effect="dark"
+                        style="margin-left: 10px; cursor: help;"
+                      >
+                        {{ holidaysSummary[formatDate(totalViewDate)].description }}
+                      </el-tag>
+                    </el-tooltip>
+                  </div>
                   <div style="display: flex; gap: 10px; align-items: center;">
-                    <el-button type="danger" size="small" @click="handleSetAsHoliday" :loading="submitting" plain>設為假日</el-button>
+                    <el-button 
+                      :type="isCurrentDateHoliday ? 'info' : 'danger'" 
+                      size="small" 
+                      @click="handleToggleHoliday" 
+                      :loading="submitting" 
+                      plain
+                    >
+                      {{ isCurrentDateHoliday ? '移除假日' : '設為假日' }}
+                    </el-button>
                     <el-select 
                       v-model="addEmpId" 
                       placeholder="新增人員..." 
@@ -417,6 +456,7 @@ const handleDateClick = (day: string) => {
 
 const submitShift = async () => {
   if (!selectedEmployeeId.value) return
+  if (submitting.value) return // 邏輯鎖：防止連續點擊
   submitting.value = true
   try {
     await api.post('/shifts/assign', {
@@ -465,18 +505,26 @@ const isSpecialHoliday = (day: string) => {
   return dayOfWeek !== 0 && dayOfWeek !== 6
 }
 
-const handleSetAsHoliday = async () => {
+const isCurrentDateHoliday = computed(() => {
   const dateStr = formatDate(totalViewDate.value)
+  const h = holidaysSummary.value[dateStr]
+  return h && !h.is_workday
+})
+
+const handleToggleHoliday = async () => {
+  if (submitting.value) return // 邏輯鎖：防止連續點擊
+  const dateStr = formatDate(totalViewDate.value)
+  const isHoliday = isCurrentDateHoliday.value
   submitting.value = true
   try {
     await api.post('/holidays/apply', {
       holidays: [{
         date: dateStr,
-        is_workday: false,
-        description: '休假'
+        is_workday: isHoliday, // 如果現在是假日(false)，則設為工作日(true)來移除；反之亦然
+        description: isHoliday ? '' : '休假'
       }]
     })
-    ElMessage.success(`${dateStr} 已成功設定為假日`)
+    ElMessage.success(`${dateStr} ${isHoliday ? '已移除假日設定' : '已成功設定為假日'}`)
     fetchOverallSummary() // 重新整理日曆標記
   } catch (err) {}
   finally {
@@ -505,6 +553,7 @@ const removeEmployeeFromBatchList = (index: number) => {
 }
 
 const submitBatchShift = async () => {
+  if (submitting.value) return // 邏輯鎖
   submitting.value = true
   try {
     await api.post('/shifts/batch-assign', {
@@ -525,6 +574,7 @@ const submitBatchShift = async () => {
 // 監聽總體排班日曆日期變化
 watch(totalViewDate, (newVal, oldVal) => {
   fetchDaySummary()
+  if (syncLoading.value) return
   // 如果月份有變，重新抓取整月摘要
   if (!oldVal || newVal.getMonth() !== oldVal.getMonth() || newVal.getFullYear() !== oldVal.getFullYear()) {
     fetchOverallSummary()
@@ -557,6 +607,7 @@ const handleSelectionChange = (val: any[]) => {
 }
 
 const submitHolidays = async () => {
+  if (submitting.value) return
   submitting.value = true
   try {
     await api.post('/holidays/apply', { holidays: selectedHolidays.value })
@@ -575,6 +626,7 @@ const openTemplateDialog = () => {
 
 const submitTemplate = async () => {
   if (!templateForm.value.name) return ElMessage.warning('請輸入樣板名稱')
+  if (submitting.value) return
   submitting.value = true
   try {
     await api.post('/schedules', templateForm.value)
@@ -613,8 +665,8 @@ onMounted(() => {
   display: flex;
   align-items: center;
   padding: 15px 25px;
-  background: linear-gradient(to right, #ffffff, #f0f7ff);
-  border-left: 6px solid #409eff;
+  background: linear-gradient(to right, #ffffff, #ede9e1);
+  border-left: 6px solid #A27B5C;
   margin-bottom: 25px;
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
@@ -653,13 +705,15 @@ onMounted(() => {
   justify-content: center;
   padding-top: 5px;
 }
-.shift-name {
-  color: #409eff;
+.shift-tag {
+  width: 85%;
   font-weight: bold;
-  font-size: 13px;
+  font-size: 14px;
+  height: 32px;
+  border-radius: 6px;
 }
 .holiday-text {
-  color: #ff4747;
+  color: var(--el-color-danger);
   font-size: 12px;
 }
 /* 讓日曆格子點擊區域充滿 */
@@ -713,8 +767,8 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   padding: 12px 20px;
-  background: linear-gradient(to right, #ecf5ff, #ffffff);
-  border-left: 5px solid #409eff;
+  background: linear-gradient(to right, #3F4E4F, #2C3639);
+  border-left: 5px solid #A27B5C;
   margin-bottom: 15px;
   border-radius: 4px;
   box-shadow: 0 2px 4px rgba(0,0,0,0.05);
@@ -722,7 +776,7 @@ onMounted(() => {
 .current-month {
   font-size: 22px;
   font-weight: 800;
-  color: #409eff;
+  color: #DCD7C9;
   letter-spacing: 1px;
 }
 .custom-calendar-header.mini {
