@@ -593,7 +593,7 @@ else:
 if __name__ == "__main__":
     import uvicorn
     # 從環境變數讀取伺服器設定，若無則使用預設值
-    host = os.getenv("CVTA_API_HOST", "0.0.0.0")
-    port = int(os.getenv("CVTA_API_PORT", 16688))
+    host = os.getenv("CVTA_CLOCKIN_API_HOST", "0.0.0.0")
+    port = int(os.getenv("CVTA_CLOCKIN_API_PORT", 16688))
     # 啟動時建議使用 --proxy-headers 如果放在 Nginx 後面
     uvicorn.run(app, host=host, port=port)

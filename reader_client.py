@@ -67,8 +67,10 @@ class LoginDialog(QDialog):
 
 class PunchClient(QMainWindow):
     # 從環境變數讀取 API 基礎路徑，並動態生成子路徑
-    _BASE_URL = os.getenv("CVTA_API_BASE_URL",
-                          "http://127.0.0.1:16688").rstrip("/")
+    _API_PORT = os.getenv("CVTA_CLOCKIN_API_PORT", "16688")
+    _BASE_URL = os.getenv("CVTA_CLOCKIN_API_URL",
+                          "http://127.0.0.1").rstrip("/")
+    _BASE_URL = f"{_BASE_URL}:{_API_PORT}"
     API_URL = f"{_BASE_URL}/api/v1/punch"
     ADD_CARD_URL = f"{_BASE_URL}/api/v1/cards/empty"
     LOGIN_URL = f"{_BASE_URL}/api/v1/login"
