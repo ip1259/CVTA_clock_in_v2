@@ -93,9 +93,17 @@ def _convert_to_daily_records(employee_id: int, query_year: int, query_month: in
         # A. 檢查是否有特殊節假日/補班定義
         holiday_def = session.query(Holiday).filter(
             Holiday.date == current_date).first()
+        shiftAssignment_def = session.query(ShiftAssignment).filter(
+            ShiftAssignment.date == current_date,
+            ShiftAssignment.employee_id == employee_id
+        ).first()
+
         if holiday_def:
             is_workday = holiday_def.is_workday
             note = holiday_def.description
+        elif shiftAssignment_def:
+            is_workday = True
+            note = ""
         else:
             is_workday = current_date.weekday() < 5  # 平日預設上班
             note = ""
