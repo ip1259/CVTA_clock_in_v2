@@ -11,3 +11,4 @@ wheels/
 CER/*
 data/*
 logs/*
+output/*
