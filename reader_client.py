@@ -18,6 +18,15 @@ from worker.offline_manager import OfflineManager
 
 logger = logging.getLogger(__name__)
 
+def resource_path(relative_path):
+    """ 取得資源檔案的絕對路徑，相容於 PyInstaller 打包後的環境 """
+    try:
+        # PyInstaller 建立的臨時資料夾路徑存於 _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
 
 class LoginDialog(QDialog):
     """管理員登入對話框"""
@@ -111,7 +120,7 @@ class PunchClient(QMainWindow):
 
     def init_tray(self):
         self.tray = QSystemTrayIcon(self)
-        self.tray.setIcon(QIcon("icon.png"))  # 請準備 icon 檔案
+        self.tray.setIcon(QIcon(resource_path("icon.png")))
 
         menu = QMenu()
 

@@ -1,4 +1,5 @@
 import os
+import sys
 import jwt
 from contextlib import asynccontextmanager
 from datetime import datetime, date, time, timedelta, timezone
@@ -374,7 +375,7 @@ async def get_holiday_candidates(_=Depends(verify_token)):
 @app.post("/api/v1/holidays/apply")
 async def apply_holidays(req: HolidayApplyRequest, _=Depends(verify_token)):
     """儲存使用者勾選的假日資料"""
-    success = ShiftManager.apply_holidays([h.model_dump() for h in req.holidays])
+    success = ShiftManager.apply_holidays([h.dict() for h in req.holidays])
     if not success:
         raise HTTPException(status_code=500, detail="Failed to save holidays")
     return {"status": "ok"}
@@ -562,8 +563,22 @@ async def get_dashboard_summary(_=Depends(verify_token)):
 
 # ── 前端 SPA 支援 ─────────────────────────────────────────────
 
+def get_base_path():
+    """
+    取得程式執行的基礎路徑
+    打包後(frozen)指向 exe 所在目錄，開發環境指向專案目錄
+    """
+    if getattr(sys, 'frozen', False):
+        # 在 onedir 模式下，這會是包含 exe 的資料夾路徑
+        return os.path.dirname(sys.executable)
+    return os.path.abspath(".")
+
 # 假設 Vue build 完的檔案放在 'dist' 資料夾
-FRONTEND_DIR = os.path.join(os.getcwd(), "dist")
+# 打包時我們將 dist 放在 exe 同級目錄或 _MEIPASS 下
+if getattr(sys, 'frozen', False):
+    FRONTEND_DIR = os.path.join(sys._MEIPASS, "dist")
+else:
+    FRONTEND_DIR = os.path.join(get_base_path(), "dist")
 
 if os.path.exists(FRONTEND_DIR):
     # 掛載靜態資源 (js, css, img)
