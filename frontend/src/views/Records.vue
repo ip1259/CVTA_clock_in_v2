@@ -68,7 +68,7 @@
               <el-button type="info" link @click="selectAllEmployees">全選</el-button>
             </el-form-item>
             <el-form-item>
-              <el-button type="primary" icon="Download" @click="handleExport" :loading="exporting">
+              <el-button type="primary" :icon="Download" @click="handleExport" :loading="exporting">
                 產生並下載報表
               </el-button>
             </el-form-item>
@@ -121,6 +121,7 @@
 import { ref, onMounted } from 'vue'
 import api from '../api'
 import { ElMessage } from 'element-plus'
+import { Download} from '@element-plus/icons-vue'
 
 const employees = ref<any[]>([])
 const exporting = ref(false)

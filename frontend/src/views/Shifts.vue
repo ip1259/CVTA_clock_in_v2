@@ -205,7 +205,7 @@
                 </el-table-column>
                 <el-table-column label="操作" width="70" align="center">
                   <template #default="scope">
-                    <el-button type="danger" icon="Delete" circle size="small" @click="removeEmployeeFromBatchList(scope.$index)" />
+                    <el-button type="danger" :icon="Delete" circle size="small" @click="removeEmployeeFromBatchList(scope.$index)" />
                   </template>
                 </el-table-column>
               </el-table>
@@ -513,7 +513,7 @@ const handleToggleHoliday = async () => {
     await api.post('/holidays/apply', {
       holidays: [{
         date: dateStr,
-        is_workday: isHoliday, // 如果現在是假日(false)，則設為工作日(true)來移除；反之亦然
+        is_workday: !!isHoliday, // 強制轉為布林值，避免 undefined 導致 JSON 欄位遺失
         description: isHoliday ? '' : '休假'
       }]
     })

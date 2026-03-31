@@ -38,9 +38,9 @@
       <el-col :span="8">
         <el-card header="系統便捷入口" shadow="never">
           <div class="quick-actions">
-            <el-button @click="$router.push('/personnel')" icon="User" class="action-btn">人事管理</el-button>
-            <el-button @click="$router.push('/records')" icon="Document" class="action-btn">匯出報表</el-button>
-            <el-button @click="$router.push('/shifts')" icon="Calendar" class="action-btn">調整排班</el-button>
+            <el-button @click="$router.push('/personnel')" :icon="User" class="action-btn">人事管理</el-button>
+            <el-button @click="$router.push('/records')" :icon="Document" class="action-btn">匯出報表</el-button>
+            <el-button @click="$router.push('/shifts')" :icon="Calendar" class="action-btn">調整排班</el-button>
           </div>
           <el-divider />
           <div class="system-status">
@@ -62,7 +62,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import api from '../api'
-import { User, CreditCard, Pointer, Checked } from '@element-plus/icons-vue'
+import { User, CreditCard, Pointer, Checked, Calendar, Document} from '@element-plus/icons-vue'
 
 const stats = ref({
   total_employees: 0,
