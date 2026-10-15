@@ -1,16 +1,21 @@
 import os
 import sys
 import jwt
+import hmac
+import time as epoch_time
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, date, time, timedelta, timezone
 from typing import List, Optional, Dict
-from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Depends
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from database.database_manager import db_manager
+from database.device_manager import DeviceManager
+from device_protocol import valid_uuid, valid_secret, request_signature, response_signature
 import logging
 from log_config import setup_logging
 
@@ -117,10 +122,25 @@ class HolidayItem(BaseModel):
 class HolidayApplyRequest(BaseModel):
     holidays: List[HolidayItem]
 
+
+class DeviceRegisterRequest(BaseModel):
+    uuid: str
+    secret: str
+    name: str = Field(min_length=1, max_length=100)
+
+
+class DeviceUpdateRequest(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    status: Optional[str] = None
+
+
+class DeviceCommandRequest(BaseModel):
+    kind: str
+
 # ── JWT Security Setup ────────────────────────────────────────
 
 
-SECRET_KEY = "CVTA_ADMIN_SECRET_KEY_CHANGE_ME"  # 實務上應從環境變數讀取
+SECRET_KEY = os.getenv("CVTA_ADMIN_SECRET_KEY", "CVTA_ADMIN_SECRET_KEY_CHANGE_ME")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 12  # Token 有效期 12 小時
 
@@ -161,6 +181,53 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="CVTA Clock-in System API", lifespan=lifespan)
 
+
+@app.middleware("http")
+async def sign_device_response(request: Request, call_next):
+    response = await call_next(request)
+    device_uuid = request.headers.get("X-Device-Id", "")
+    nonce = request.headers.get("X-Device-Nonce", "")
+    if not device_uuid or not nonce or not (request.url.path.startswith("/api/v1/devices/me") or
+                                           request.url.path in ("/api/v1/punch", "/api/v1/cards/empty")):
+        return response
+    identity = DeviceManager.get_secret(device_uuid)
+    if not identity:
+        return response
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    headers = dict(response.headers)
+    headers["X-Device-Response-Signature"] = response_signature(identity[0], nonce, response.status_code, body)
+    return Response(content=body, status_code=response.status_code, headers=headers, media_type=response.media_type)
+
+
+async def verify_device(request: Request):
+    device_uuid = request.headers.get("X-Device-Id", "")
+    timestamp = request.headers.get("X-Device-Timestamp", "")
+    nonce = request.headers.get("X-Device-Nonce", "")
+    signature = request.headers.get("X-Device-Signature", "")
+    if not valid_uuid(device_uuid) or not re.fullmatch(r"[0-9]{10,13}", timestamp) or not re.fullmatch(r"[0-9a-f]{32}", nonce):
+        raise HTTPException(status_code=401, detail="Invalid device credentials")
+    if abs(int(epoch_time.time()) - int(timestamp)) > 300:
+        raise HTTPException(status_code=401, detail="Device clock outside allowed window")
+    identity = DeviceManager.get_secret(device_uuid)
+    if not identity:
+        raise HTTPException(status_code=403, detail="Device not allowed")
+    if identity[1] == "revoked" and request.url.path != "/api/v1/devices/me":
+        raise HTTPException(status_code=403, detail="Device revoked")
+    target = request.scope["raw_path"].decode("ascii")
+    if request.scope.get("query_string"):
+        target += "?" + request.scope["query_string"].decode("ascii")
+    body = await request.body()
+    expected = request_signature(identity[0], request.method, target, timestamp, nonce, body)
+    if not hmac.compare_digest(signature, expected) or not DeviceManager.consume_nonce(device_uuid, nonce):
+        raise HTTPException(status_code=401, detail="Invalid or replayed device signature")
+    return device_uuid
+
+
+async def active_device(device_uuid: str = Depends(verify_device)):
+    if not DeviceManager.is_active(device_uuid):
+        raise HTTPException(status_code=403, detail="Device is not approved or is paused")
+    return device_uuid
+
 # 支援開發環境下的 Vue 跨域請求
 app.add_middleware(
     CORSMiddleware,
@@ -175,7 +242,7 @@ app.add_middleware(
 
 
 @app.post("/api/v1/punch")
-async def punch_card(req: PunchRequest):
+async def punch_card(req: PunchRequest, _=Depends(active_device)):
     try:
         dt = datetime.strptime(req.timestamp, "%Y-%m-%d %H:%M:%S")
     except ValueError:
@@ -496,12 +563,62 @@ async def get_unassigned_cards(_=Depends(verify_token)):
 
 
 @app.post("/api/v1/cards/empty")
-async def add_empty_card(req: CardCreateRequest, _=Depends(verify_token)):
+async def add_empty_card(req: CardCreateRequest, _=Depends(verify_token), __=Depends(active_device)):
     """新增一張無人使用的空卡"""
     success, message = HRManager.add_empty_card(req.uid)
     if not success:
         raise HTTPException(status_code=400, detail=message)
     return {"status": "ok", "message": message}
+
+
+@app.post("/api/v1/devices/register")
+async def register_device(req: DeviceRegisterRequest):
+    if not valid_uuid(req.uuid) or not valid_secret(req.secret):
+        raise HTTPException(status_code=400, detail="Invalid UUID or device secret")
+    device = DeviceManager.register(req.uuid, req.secret, req.name.strip())
+    if not device:
+        raise HTTPException(status_code=409, detail="UUID already registered")
+    return device
+
+
+@app.get("/api/v1/devices/me")
+async def device_state(device_uuid: str = Depends(verify_device)):
+    return DeviceManager.poll(device_uuid)
+
+
+@app.post("/api/v1/devices/me/commands/{command_id}/ack")
+async def acknowledge_device_command(command_id: int, device_uuid: str = Depends(verify_device)):
+    if not DeviceManager.acknowledge(device_uuid, command_id):
+        raise HTTPException(status_code=404, detail="Command not found or expired")
+    return {"status": "ok"}
+
+
+@app.get("/api/v1/devices")
+async def list_devices(_=Depends(verify_token)):
+    return DeviceManager.list_all()
+
+
+@app.patch("/api/v1/devices/{device_uuid}")
+async def update_device(device_uuid: str, req: DeviceUpdateRequest, _=Depends(verify_token)):
+    if req.status is not None and req.status not in ("approved", "disabled", "revoked"):
+        raise HTTPException(status_code=400, detail="Invalid device status")
+    try:
+        result = DeviceManager.update(device_uuid, name=req.name, status=req.status)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if not result:
+        raise HTTPException(status_code=404, detail="Device not found")
+    return result
+
+
+@app.post("/api/v1/devices/{device_uuid}/commands")
+async def send_device_command(device_uuid: str, req: DeviceCommandRequest, _=Depends(verify_token)):
+    if req.kind not in ("pause", "resume", "restart"):
+        raise HTTPException(status_code=400, detail="Invalid command")
+    result = DeviceManager.command(device_uuid, req.kind)
+    if not result:
+        raise HTTPException(status_code=404, detail="Approved device not found")
+    return result
 
 # ── 系統維護 ──────────────────────────────────────────────────
 

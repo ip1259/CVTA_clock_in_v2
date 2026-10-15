@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import (Column, Integer, String, DateTime,
                         ForeignKey, Boolean, Time, Index,
                         Date)
@@ -6,6 +6,11 @@ from sqlalchemy.orm import relationship, declarative_base
 
 
 Base = declarative_base()
+
+
+def utcnow_naive():
+    """UTC timestamp stored in existing SQLite naive DateTime columns."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class Schedule(Base):
@@ -73,6 +78,34 @@ class Account(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(50), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)  # 儲存加密後的密碼
+
+
+class ReaderDevice(Base):
+    __tablename__ = "reader_devices"
+    uuid = Column(String(36), primary_key=True)
+    name = Column(String(100), nullable=False)
+    secret = Column(String(64), nullable=False)
+    status = Column(String(16), nullable=False, default="pending")
+    paused = Column(Boolean, nullable=False, default=False)
+    last_seen = Column(DateTime)
+    created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+
+
+class DeviceNonce(Base):
+    __tablename__ = "device_nonces"
+    device_uuid = Column(String(36), primary_key=True)
+    nonce = Column(String(64), primary_key=True)
+    expires_at = Column(DateTime, nullable=False, index=True)
+
+
+class DeviceCommand(Base):
+    __tablename__ = "device_commands"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    device_uuid = Column(String(36), ForeignKey("reader_devices.uuid"), nullable=False, index=True)
+    kind = Column(String(16), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+    expires_at = Column(DateTime, nullable=False)
+    acknowledged_at = Column(DateTime)
 
 
 class Holiday(Base):

@@ -5,6 +5,30 @@
     </div>
 
     <el-tabs type="border-card">
+      <el-tab-pane label="讀卡端管理">
+        <el-button @click="fetchDevices">重新整理</el-button>
+        <el-table :data="devices" border style="margin-top: 16px">
+          <el-table-column prop="name" label="名稱" min-width="130" />
+          <el-table-column prop="uuid" label="UUID" min-width="300" />
+          <el-table-column label="狀態" width="120">
+            <template #default="scope">{{ deviceStatusText(scope.row.status) }}</template>
+          </el-table-column>
+          <el-table-column label="讀卡" width="90">
+            <template #default="scope">{{ scope.row.paused ? '暫停' : '啟用' }}</template>
+          </el-table-column>
+          <el-table-column prop="last_seen" label="最近連線 (UTC)" min-width="170" />
+          <el-table-column label="操作" min-width="370">
+            <template #default="scope">
+              <el-button size="small" @click="renameDevice(scope.row)">命名</el-button>
+              <el-button v-if="scope.row.status === 'pending' || scope.row.status === 'disabled'" size="small" type="success" @click="setDeviceStatus(scope.row, 'approved')">核准</el-button>
+              <el-button v-if="scope.row.status === 'approved'" size="small" @click="setDeviceStatus(scope.row, 'disabled')">停用</el-button>
+              <el-button v-if="scope.row.status === 'approved'" size="small" @click="sendCommand(scope.row, scope.row.paused ? 'resume' : 'pause')">{{ scope.row.paused ? '恢復讀卡' : '暫停讀卡' }}</el-button>
+              <el-button v-if="scope.row.status === 'approved'" size="small" @click="sendCommand(scope.row, 'restart')">重啟程式</el-button>
+              <el-button v-if="scope.row.status !== 'revoked'" size="small" type="danger" @click="setDeviceStatus(scope.row, 'revoked')">撤銷</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-tab-pane>
       <!-- 頁籤一：帳號管理 -->
       <el-tab-pane label="管理員帳號">
         <div class="header-actions">
@@ -102,6 +126,28 @@ import api from '../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const accounts = ref([])
+type Device = { uuid: string; name: string; status: string; paused: boolean; last_seen: string | null }
+const devices = ref<Device[]>([])
+const deviceStatusText = (status: string) => ({ pending: '待審', approved: '已核准', disabled: '已停用', revoked: '已撤銷' }[status] || status)
+const fetchDevices = async () => {
+  const { data } = await api.get('/devices')
+  devices.value = data
+}
+const renameDevice = async (device: Device) => {
+  const { value } = await ElMessageBox.prompt('裝置名稱', '重新命名', { inputValue: device.name, inputPattern: /\S/, inputErrorMessage: '請輸入名稱' })
+  await api.patch(`/devices/${device.uuid}`, { name: value.trim() })
+  await fetchDevices()
+}
+const setDeviceStatus = async (device: Device, status: string) => {
+  if (status === 'revoked') await ElMessageBox.confirm(`撤銷 ${device.name} 後無法重新啟用，確定嗎？`, '撤銷裝置', { type: 'warning' })
+  await api.patch(`/devices/${device.uuid}`, { status })
+  await fetchDevices()
+}
+const sendCommand = async (device: Device, kind: string) => {
+  await api.post(`/devices/${device.uuid}/commands`, { kind })
+  ElMessage.success(kind === 'restart' ? '重啟指令已排入佇列' : '讀卡狀態已更新')
+  await fetchDevices()
+}
 const submitting = ref(false)
 const migrating = ref(false)
 
@@ -175,7 +221,7 @@ const handleMigrate = async () => {
   }
 }
 
-onMounted(fetchAccounts)
+onMounted(() => { fetchAccounts(); fetchDevices() })
 </script>
 
 <style scoped>

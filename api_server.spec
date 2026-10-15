@@ -5,7 +5,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('output/dist', 'dist'),
+        ('dist', 'dist'),
     ],
     hiddenimports=[
         'uvicorn.logging',

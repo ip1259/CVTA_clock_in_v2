@@ -6,6 +6,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 from database.base import Base, Employee, Card, Record, Schedule, Account
+from database.schema import migrate_hot_schema, DEVICE_TABLES
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ class DatabaseManager:
 
     def init_db(self):
         """初始化資料庫表結構"""
-        Base.metadata.create_all(self.hot_engine)
+        migrate_hot_schema(self.hot_engine)
         logger.info("資料庫結構初始化完成")
 
         # 檢查並新增預設帳號 (如果目前沒有任何帳號)
@@ -65,7 +66,8 @@ class DatabaseManager:
             engine = create_engine(archive_url, connect_args={"timeout": 10})
 
             # 確保冷庫的 Table 結構也存在 (初次連線時執行)
-            Base.metadata.create_all(engine)
+            # Archive databases contain attendance history only; never add device credentials.
+            Base.metadata.create_all(engine, tables=[t for t in Base.metadata.sorted_tables if t not in DEVICE_TABLES])
             self._archive_engines[year] = sessionmaker(bind=engine)
 
         return self._archive_engines[year]()

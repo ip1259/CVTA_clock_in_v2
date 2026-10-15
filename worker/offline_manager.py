@@ -28,13 +28,14 @@ class OfflineManager:
                 self._initialized = True
                 logger.info(f"[Offline] 初始化緩衝管理員，路徑: {self.file_path}")
 
-    def save_punch(self, uid: str, timestamp: str):
+    def save_punch(self, uid: str, timestamp: str, device_uuid: str):
         """執行緒安全地存入打卡資訊"""
         with self._file_lock:
             data = self.load_all()
             data.append({
                 "uid": uid,
                 "timestamp": timestamp,
+                "device_uuid": device_uuid,
                 "retry_count": 0
             })
             self._write_to_file(data)

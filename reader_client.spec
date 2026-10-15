@@ -25,7 +25,6 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='reader_client',
     exclude_binaries=True,
     name='reader_client_app',
     debug=False,
