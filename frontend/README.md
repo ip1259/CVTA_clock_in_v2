@@ -1,5 +1,10 @@
-# Vue 3 + TypeScript + Vite
+# CVTA 管理前端
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+Vue 3、TypeScript 與 Vite 製作的打卡系統管理介面。
 
-Learn more about the recommended Project Setup and IDE Support in the [Vue Docs TypeScript Guide](https://vuejs.org/guide/typescript/overview.html#project-setup).
+```sh
+npm install
+npm run dev
+```
+
+正式版使用 `npm run build` 產生部署檔案。
