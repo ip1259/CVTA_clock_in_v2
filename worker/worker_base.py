@@ -8,6 +8,7 @@ worker_base.py
 from __future__ import annotations
 from abc import abstractmethod
 from typing import Any
+import traceback
 
 from PySide6.QtCore import QObject, QThread, Signal
 
@@ -78,7 +79,7 @@ class BaseWorker(QThread):
             result = self.execute()
             if not self._cancelled:
                 self.signals.success.emit(self.WORKER_ID, result)
-        except Exception as exc:
-            self.signals.error.emit(self.WORKER_ID, str(exc))
+        except Exception:
+            self.signals.error.emit(self.WORKER_ID, traceback.format_exc())
         finally:
             self.signals.finished.emit(self.WORKER_ID)

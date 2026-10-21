@@ -12,7 +12,7 @@ worker_manager.py
 from __future__ import annotations
 from typing import Callable
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, Slot, Qt
 
 from worker.worker_base import BaseWorker, WorkerSignals
 
@@ -39,10 +39,12 @@ class WorkerManager(QObject):
     any_success = Signal(str, object)   # worker_id, result
     any_error = Signal(str, str)      # worker_id, error_message
     any_finished = Signal(str)           # worker_id
+    idle = Signal()                       # all QThreads have actually stopped
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
         self._workers: dict[str, BaseWorker] = {}
+        self._accepting = True
 
     # ── 啟動 ─────────────────────────────────────────────────
 
@@ -53,8 +55,8 @@ class WorkerManager(QObject):
         """
         wid = worker.WORKER_ID
 
-        if wid in self._workers and self._workers[wid].isRunning():
-            return False  # 已在執行中，忽略
+        if not self._accepting or wid in self._workers:
+            return False  # 關閉中，或前一個同 ID 執行緒尚未完成清理
 
         # 接通全域訊號
         s: WorkerSignals = worker.signals
@@ -62,7 +64,8 @@ class WorkerManager(QObject):
         s.progress.connect(self.any_progress)
         s.success.connect(self.any_success)
         s.error.connect(self.any_error)
-        s.finished.connect(lambda wid=wid: self._on_finished(wid))
+        s.finished.connect(self.any_finished)
+        worker.finished.connect(self._on_thread_finished, Qt.QueuedConnection)
 
         self._workers[wid] = worker
         worker.start()
@@ -78,6 +81,18 @@ class WorkerManager(QObject):
     def cancel_all(self) -> None:
         for wid in list(self._workers):
             self.cancel(wid)
+
+    def begin_shutdown(self) -> None:
+        """拒絕新工作；呼叫端決定哪些現有工作需要取消。"""
+        self._accepting = False
+
+    def resume(self) -> None:
+        """重啟失敗時恢復接受工作。"""
+        self._accepting = True
+
+    def has_workers(self) -> bool:
+        """包含已送出結果、但 QThread.finished 尚未處理的工作。"""
+        return bool(self._workers)
 
     # ── 查詢 ─────────────────────────────────────────────────
 
@@ -136,9 +151,15 @@ class WorkerManager(QObject):
 
     # ── 內部 ─────────────────────────────────────────────────
 
-    def _on_finished(self, worker_id: str) -> None:
-        self.any_finished.emit(worker_id)
-        # 自動清理已完成的 worker
-        if worker := self._workers.get(worker_id):
-            worker.deleteLater()
-            del self._workers[worker_id]
+    @Slot()
+    def _on_thread_finished(self) -> None:
+        worker = self.sender()
+        if not isinstance(worker, BaseWorker):
+            return
+        wid = worker.WORKER_ID
+        # 舊執行緒的完成通知不得清掉同 ID 的新執行緒。
+        if self._workers.get(wid) is worker:
+            del self._workers[wid]
+        worker.deleteLater()
+        if not self._workers:
+            self.idle.emit()

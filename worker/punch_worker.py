@@ -108,5 +108,5 @@ class AddCardWorker(BaseWorker):
 
                 return {"status": "error", "message": error_detail}
         except Exception as e:
-            logger.error(f"Add Card Task Error: {e}")
+            logger.exception("Add Card Task Error")
             return {"status": "error", "message": str(e)}

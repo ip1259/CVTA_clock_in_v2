@@ -2,14 +2,14 @@ import sys
 import os
 import httpx
 import logging
-from log_config import setup_logging
+from reader.diagnostics import setup_client_diagnostics
 
 from datetime import datetime
 from PySide6.QtWidgets import (QApplication, QMainWindow, QSystemTrayIcon,
                                QMenu, QDialog, QVBoxLayout, QLineEdit,
                                QPushButton, QLabel)
 from PySide6.QtGui import QIcon, QAction
-from PySide6.QtCore import QTimer, Qt, QProcess
+from PySide6.QtCore import QTimer, Qt, QProcess, Slot
 
 from reader.global_card_reader import GlobalCardReader  # 前文定義的全域監聽類別
 from worker.worker_manager import WorkerManager
@@ -88,10 +88,16 @@ class PunchClient(QMainWindow):
         self.identity = DeviceIdentity()
         self.device_status = "pending"
         self.remote_paused = False
+        self._shutdown_requested = False
+        self._restart_requested = False
         self._refresh_urls()
 
         # 1. 初始化元件
         self.worker_manager = WorkerManager(self)
+        self.worker_manager.idle.connect(self._finish_shutdown)
+        self.worker_manager.any_error.connect(
+            lambda wid, detail: logger.error("Worker %s failed:\n%s", wid, detail)
+        )
         self.offline_mgr = OfflineManager()
         self.reader = GlobalCardReader(threshold_ms=50)
 
@@ -116,10 +122,14 @@ class PunchClient(QMainWindow):
         self.device_timer = QTimer(self)
         self.device_timer.timeout.connect(self._sync_device)
         self.device_timer.start(30000)
+        self.shutdown_warning_timer = QTimer(self)
+        self.shutdown_warning_timer.setSingleShot(True)
+        self.shutdown_warning_timer.timeout.connect(self._warn_slow_shutdown)
         self._sync_device()
 
         # 啟動監聽
         self.reader.start()
+        logger.info("Desktop reader started")
 
     def _refresh_urls(self):
         self.API_URL = self.identity.server_url + "/api/v1/punch"
@@ -127,6 +137,8 @@ class PunchClient(QMainWindow):
         self.LOGIN_URL = self.identity.server_url + "/api/v1/login"
 
     def _sync_device(self):
+        if self._shutdown_requested:
+            return
         self.worker_manager.start(DeviceSyncWorker(self.identity))
 
     def _on_device_sync(self, state):
@@ -146,19 +158,26 @@ class PunchClient(QMainWindow):
             self.tray.showMessage("讀卡端驗證失敗", "請檢查伺服器位址或重新申請裝置", QSystemTrayIcon.Warning)
 
     def _restart_application(self):
+        logger.info("Remote restart command acknowledged; draining active work")
+        self._begin_shutdown(restart=True)
+
+    def _launch_replacement(self) -> bool:
         if getattr(sys, "frozen", False):
             executable, args = sys.executable, []
         else:
             executable, args = sys.executable, [os.path.abspath(__file__)]
-        started = QProcess.startDetached(executable, args)
-        if (started[0] if isinstance(started, tuple) else started):
-            self._safe_exit()
+        try:
+            started = QProcess.startDetached(executable, args)
+        except Exception:
+            logger.exception("Failed to launch replacement reader")
+            return False
+        return bool(started[0] if isinstance(started, tuple) else started)
 
     def init_tray(self):
         self.tray = QSystemTrayIcon(self)
         self.tray.setIcon(QIcon(resource_path("icon.png")))
 
-        menu = QMenu()
+        menu = QMenu(self)
 
         id_act = QAction(f"裝置 UUID: {self.identity.uuid}", self)
         id_act.triggered.connect(lambda: QApplication.clipboard().setText(self.identity.uuid))
@@ -183,6 +202,8 @@ class PunchClient(QMainWindow):
         self.tray.show()
 
     def _set_server_url(self):
+        if self._shutdown_requested:
+            return
         from PySide6.QtWidgets import QInputDialog, QMessageBox
         url, ok = QInputDialog.getText(self, "伺服器位址", "內網伺服器 URL", text=self.identity.server_url)
         if not ok:
@@ -215,8 +236,6 @@ class PunchClient(QMainWindow):
                 self.tray.showMessage("打卡失敗", result.get("message", "伺服器拒絕請求"), QSystemTrayIcon.Warning)
 
         self.worker_manager.on_success(wid, handle_success)
-        self.worker_manager.on_error(
-            wid, lambda err: logger.error(f"Punch Task Error: {err}"))
 
     def _setup_retry_signals(self):
         wid = RetryWorker.WORKER_ID
@@ -247,6 +266,9 @@ class PunchClient(QMainWindow):
     # ── Slots & Logic ────────────────────────────────────────
 
     def _toggle_admin_mode(self, checked):
+        if self._shutdown_requested:
+            self.admin_act.setChecked(self.is_admin_mode)
+            return
         if checked:
             if self.device_status != "approved" or self.remote_paused:
                 self.admin_act.setChecked(False)
@@ -278,6 +300,8 @@ class PunchClient(QMainWindow):
                                   QSystemTrayIcon.Information)
 
     def _on_card_scanned(self, uid: str):
+        if self._shutdown_requested:
+            return
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         if self._reader_suspended or self.device_status != "approved" or self.remote_paused:
@@ -298,18 +322,65 @@ class PunchClient(QMainWindow):
         self.worker_manager.start(worker)
 
     def _trigger_retry(self):
+        if self._shutdown_requested:
+            return
         if self.device_status == "approved" and not self.remote_paused and not self.worker_manager.is_running(RetryWorker.WORKER_ID):
             worker = RetryWorker(self.API_URL, self.identity)
             self.worker_manager.start(worker)
 
     def _safe_exit(self):
+        self._begin_shutdown(restart=False)
+
+    def _begin_shutdown(self, restart: bool):
+        if self._shutdown_requested:
+            return
+        self._shutdown_requested = True
+        self._restart_requested = restart
+        logger.info("Reader shutdown requested: %s", "restart" if restart else "exit")
+        self.worker_manager.begin_shutdown()
+        self.retry_timer.stop()
+        self.device_timer.stop()
         self.reader.stop()
-        self.worker_manager.cancel_all()
+        # RetryWorker checks cancellation between entries and still persists
+        # removals for entries uploaded before cancellation.
+        self.worker_manager.cancel(RetryWorker.WORKER_ID)
+        if self.worker_manager.has_workers():
+            self.shutdown_warning_timer.start(10000)
+        else:
+            self._finish_shutdown()
+
+    def _warn_slow_shutdown(self):
+        logger.warning("Still waiting for workers before exit: %s", self.worker_manager.running_ids())
+
+    @Slot()
+    def _finish_shutdown(self):
+        if not self._shutdown_requested or self.worker_manager.has_workers():
+            return
+        self.shutdown_warning_timer.stop()
+        if self._restart_requested:
+            if self._launch_replacement():
+                logger.info("Replacement reader launched; exiting old process")
+            else:
+                logger.error("Replacement reader did not start; resuming this process")
+                self.tray.showMessage("重啟失敗", "無法啟動新的讀卡程式，現有程式繼續運作", QSystemTrayIcon.Critical)
+                self._shutdown_requested = False
+                self._restart_requested = False
+                self.worker_manager.resume()
+                self.retry_timer.start(300000)
+                self.device_timer.start(30000)
+                self.reader.start()
+                return
+        else:
+            logger.info("Reader exited normally")
+        self._quit_application()
+
+    def _quit_application(self):
         QApplication.quit()
 
 
 if __name__ == "__main__":
-    setup_logging()
+    client_log_dir = setup_client_diagnostics()
+    logger.info("Desktop reader starting; logs=%s", client_log_dir)
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     client = PunchClient()

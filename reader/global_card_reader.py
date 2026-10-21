@@ -1,5 +1,5 @@
 import logging
-from PySide6.QtCore import QObject, Signal, QTimer
+from PySide6.QtCore import QObject, Signal, QTimer, Slot, Qt
 from pynput import keyboard
 
 logger = logging.getLogger(__name__)
@@ -8,8 +8,8 @@ logger = logging.getLogger(__name__)
 class GlobalCardReader(QObject):
     # 當識別出一串完整的卡號時發送
     card_scanned = Signal(str)
-    # 內部信號：用於安全地跨執行緒啟動計時器
-    _request_timer_start = Signal(int)
+    # pynput 僅傳遞按鍵；緩衝與計時器只在 GUI 執行緒操作。
+    _key_pressed = Signal(str, bool)
 
     def __init__(self, threshold_ms: int = 50):
         super().__init__()
@@ -17,17 +17,17 @@ class GlobalCardReader(QObject):
         self.key_buffer = []
 
         # 1. 初始化計時器 (此物件屬於建立它的執行緒，通常是主 GUI 執行緒)
-        self.timer = QTimer()
+        self.timer = QTimer(self)
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self._on_input_finished)
 
-        # 2. 綁定內部信號到計時器的 start 方法
-        # 這是關鍵：信號連接到同一個執行緒的物件時，Qt 會自動處理 thread-safe
-        self._request_timer_start.connect(self.timer.start)
+        self._key_pressed.connect(self._record_key, Qt.QueuedConnection)
 
         self.listener = None
+        self._stopped = True
 
     def start(self):
+        self._stopped = False
         # pynput 的 Listener 本質是 Thread，一旦停止就必須重新建立實例
         if self.listener is None or not self.listener.running:
             self.listener = keyboard.Listener(on_press=self._on_press)
@@ -36,8 +36,11 @@ class GlobalCardReader(QObject):
         logger.info(f"[Reader] 全域監聽已啟動 (閾值: {self.threshold_ms}ms)")
 
     def stop(self):
-        self.listener.stop()
+        self._stopped = True
+        if self.listener is not None:
+            self.listener.stop()
         self.timer.stop()
+        self.key_buffer.clear()
 
     def _on_press(self, key):
         """pynput 的回呼函數，執行於獨立執行緒"""
@@ -46,21 +49,26 @@ class GlobalCardReader(QObject):
             if hasattr(key, 'char') and key.char:
                 char = key.char
             elif key == keyboard.Key.enter:
-                # 有些讀卡機會送 Enter，直接觸發完成
-                self._request_timer_start.emit(0)  # 0ms 代表立即在主執行緒觸發超時
+                self._key_pressed.emit("", True)
                 return
             else:
                 return
 
-            # 每按下一顆鍵，就重新計時
-            self.key_buffer.append(char)
-            
-            # 關鍵修正：不直接呼叫 start()，而是 emit 信號
-            # 這會把啟動 Timer 的任務排入主執行緒的事件循環
-            self._request_timer_start.emit(self.threshold_ms)
+            self._key_pressed.emit(char, False)
 
-        except Exception as e:
-            logger.error(f"監聽按鍵異常: {e}")
+        except Exception:
+            logger.exception("監聽按鍵異常")
+
+    @Slot(str, bool)
+    def _record_key(self, char: str, enter: bool):
+        if self._stopped:
+            return
+        if enter:
+            if self.key_buffer:
+                self.timer.start(0)
+        else:
+            self.key_buffer.append(char)
+            self.timer.start(self.threshold_ms)
 
     def _on_input_finished(self):
         """當計時器超時，代表讀卡機已噴完資料"""

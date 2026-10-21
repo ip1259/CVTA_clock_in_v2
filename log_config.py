@@ -1,6 +1,7 @@
 import logging
 import logging.config
 import os
+import sys
 
 
 def setup_logging(default_path='logs', default_level=logging.DEBUG):
@@ -72,7 +73,7 @@ def setup_logging(default_path='logs', default_level=logging.DEBUG):
         },
         "loggers": {
             "": {  # Root logger configuration
-                "handlers": ["console", "debug", "error"],
+                "handlers": (["console"] if sys.stdout is not None else []) + ["debug", "error"],
                 "level": default_level,
             },
         },
