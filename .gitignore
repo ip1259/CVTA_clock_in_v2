@@ -12,3 +12,6 @@ CER/*
 data/*
 logs/*
 output/*
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
