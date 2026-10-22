@@ -1,6 +1,6 @@
 # 維運操作導覽
 
-此目錄按操作任務分類。集中伺服器目前是 Windows 主機 `192.168.100.23`；後端與管理頁同機，桌面讀卡端可裝在接有實體讀卡機的 Windows 電腦，ESP32 可獨立供電運行。原始碼在 [GitHub 專案](https://github.com/ip1259/CVTA_clock_in_v2)。
+此目錄按操作任務分類。集中伺服器目前是 Windows 主機 `192.168.100.23`；後端與管理頁同機，桌面讀卡端可裝在接有實體讀卡機的 Windows 電腦，ESP32 可獨立供電運行。原始碼在 [GitHub 專案](https://github.com/CVTA-Engineers/CVTA-Attendance-System)。
 
 | 要做的事 | 從這裡開始 |
 | --- | --- |

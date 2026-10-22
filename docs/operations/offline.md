@@ -12,7 +12,7 @@
 
 1. 以序列監控器或 BLE 輸入 `status`、`queue`，確認 Wi-Fi、NTP、核准狀態及待送筆數。`TIME UNSYNC` 時先恢復時間同步；`DENIED` 時查後台狀態。
 2. 恢復網路後等待自動補送，用 `queue` 確認筆數下降，再到管理頁核對原本打卡時間。HTTP 401／403 會停止補送；HTTP 400／404 事件會轉入 `.bad`，用 `bad` 查看，先比對卡號與後台資料。
-3. 只有確認事件已入庫或決定如何人工補登後，才依[韌體指南](https://github.com/ip1259/CVTA_clock_in_v2/blob/master/firmware/GUIDE.md)處理指定 `.bad` 事件。`QUEUE FULL/ERR` 表示該次刷卡沒有保存，須人工處理。
+3. 只有確認事件已入庫或決定如何人工補登後，才依[韌體指南](https://github.com/CVTA-Engineers/CVTA-Attendance-System/blob/master/firmware/GUIDE.md)處理指定 `.bad` 事件。`QUEUE FULL/ERR` 表示該次刷卡沒有保存，須人工處理。
 
 ## 管理頁或打卡失敗
 

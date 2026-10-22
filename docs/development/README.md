@@ -1,6 +1,6 @@
 # 開發文件導覽
 
-原始碼以 [GitHub 專案](https://github.com/ip1259/CVTA_clock_in_v2)為準。本目錄說明程式架構與常見開發任務；執行環境的操作方法另見[維運導覽](../operations/README.md)。
+原始碼以 [GitHub 專案](https://github.com/CVTA-Engineers/CVTA-Attendance-System)為準。本目錄說明程式架構與常見開發任務；執行環境的操作方法另見[維運導覽](../operations/README.md)。
 
 ## 打卡資料流
 

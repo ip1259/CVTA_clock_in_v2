@@ -1,6 +1,6 @@
 # CVTA 打卡系統使用文件
 
-CVTA 系統由 Windows 後端與管理網頁、Windows 桌面讀卡端及 ESP32 獨立讀卡端組成。管理網頁目前位於 `http://192.168.100.23:16688/`；原始碼與開發說明位於 [GitHub 專案](https://github.com/ip1259/CVTA_clock_in_v2)。
+CVTA 系統由 Windows 後端與管理網頁、Windows 桌面讀卡端及 ESP32 獨立讀卡端組成。管理網頁目前位於 `http://192.168.100.23:16688/`；原始碼與開發說明位於 [GitHub 專案](https://github.com/CVTA-Engineers/CVTA-Attendance-System)。
 
 ## 操作文件
 
@@ -20,4 +20,4 @@ Windows 桌面端一般啟動時不顯示測試模式。需要模擬讀卡時，
 
 現行 v0.2.1 Windows 版的後端入口是 `api_server/api_server_app.exe`，管理網頁已包含在 `api_server/_internal/dist/`；桌面端入口是 `reader_client/reader_client_app.exe`。兩者都需保留完整資料夾及其 `_internal/`。程式使用相對路徑存取資料庫與日誌，實際位置取決於啟動時的工作目錄，查找方法見[啟停後端](operations/server.md)。
 
-封包內的 `firmware/CVTA_Reader/` 是 ESP32 原始碼；依[韌體建置指南](firmware/BUILD.md)編譯及燒錄，並完成[現場測試](firmware/TESTING.md)。
+原始碼封包內的 `firmware/CVTA_Reader/` 是 ESP32 韌體；依[韌體建置指南](../firmware/BUILD.md)編譯及燒錄，並完成[現場測試](../firmware/TESTING.md)。

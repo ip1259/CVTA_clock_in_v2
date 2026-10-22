@@ -20,4 +20,4 @@
 - 同一台電腦更新程式時，先退出舊程式，保留該使用者的 `device.json` 與[離線紀錄](offline.md)，再更換完整程式資料夾並重新測試。
 - 換到另一台電腦時，讓新端自行產生 UUID 與密鑰，照上列步驟重新核准；不可複製舊機憑證。舊機若仍有待補送紀錄，先處理後再停用或撤銷舊裝置。
 
-**完成標準：**後台顯示正確 UUID 且已核准，實卡測試紀錄已寫入。若讀卡端被暫停、停用或撤銷，先在後台確認狀態；撤銷不可直接恢復，詳見[裝置協定](https://github.com/ip1259/CVTA_clock_in_v2/blob/master/docs/DEPLOYMENT_AND_PROTOCOL.md)。
+**完成標準：**後台顯示正確 UUID 且已核准，實卡測試紀錄已寫入。若讀卡端被暫停、停用或撤銷，先在後台確認狀態；撤銷不可直接恢復，詳見[裝置協定](https://github.com/CVTA-Engineers/CVTA-Attendance-System/blob/master/docs/DEPLOYMENT_AND_PROTOCOL.md)。
