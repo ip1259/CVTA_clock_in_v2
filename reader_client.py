@@ -1,13 +1,10 @@
 import sys
 import os
-import httpx
 import logging
 from reader.diagnostics import setup_client_diagnostics
 
 from datetime import datetime
-from PySide6.QtWidgets import (QApplication, QMainWindow, QSystemTrayIcon,
-                               QMenu, QDialog, QVBoxLayout, QLineEdit,
-                               QPushButton, QLabel)
+from PySide6.QtWidgets import QApplication, QMainWindow, QSystemTrayIcon, QMenu
 from PySide6.QtGui import QIcon, QAction
 from PySide6.QtCore import QTimer, Qt, QProcess, Slot
 
@@ -19,6 +16,8 @@ from worker.device_worker import DeviceSyncWorker
 from reader.identity import DeviceIdentity
 
 logger = logging.getLogger(__name__)
+DEVICE_POLL_MS = 5000
+DEVICE_RETRY_MS = 30000
 
 def resource_path(relative_path):
     """ 取得資源檔案的絕對路徑，相容於 PyInstaller 打包後的環境 """
@@ -30,64 +29,19 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 
-class LoginDialog(QDialog):
-    """管理員登入對話框"""
-
-    def __init__(self, login_url: str, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("管理員驗證")
-        self.setFixedSize(250, 180)
-        self.login_url = login_url
-        self.token = ""
-
-        layout = QVBoxLayout(self)
-
-        layout.addWidget(QLabel("管理員帳號:"))
-        self.user_input = QLineEdit()
-        layout.addWidget(self.user_input)
-
-        layout.addWidget(QLabel("密碼:"))
-        self.pass_input = QLineEdit()
-        self.pass_input.setEchoMode(QLineEdit.Password)
-        layout.addWidget(self.pass_input)
-
-        self.login_btn = QPushButton("登入")
-        self.login_btn.clicked.connect(self.handle_login)
-        layout.addWidget(self.login_btn)
-
-    def handle_login(self):
-        user = self.user_input.text()
-        pwd = self.pass_input.text()
-
-        try:
-            resp = httpx.post(self.login_url, json={
-                              "username": user, "password": pwd}, timeout=5.0)
-            if resp.status_code == 200:
-                self.token = resp.json().get("access_token", "")
-                self.accept()
-            else:
-                from PySide6.QtWidgets import QMessageBox
-                QMessageBox.critical(self, "錯誤", "帳號或密碼錯誤")
-        except Exception as e:
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "連線錯誤", f"無法連線到伺服器: {e}")
-
-    def get_token(self):
-        return self.token
-
-
 class PunchClient(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Punch System Client")
 
-        # 管理員狀態
-        self.is_admin_mode = False
-        self._reader_suspended = False  # 新增：用於暫停讀卡處理的旗標
-        self.admin_token = ""  # 實務上應透過登入對話框獲取
+        self.enrollment_credential = ""
+        self.enrollment_timer = QTimer(self)
+        self.enrollment_timer.setSingleShot(True)
+        self.enrollment_timer.timeout.connect(self._enrollment_timed_out)
         self.identity = DeviceIdentity()
         self.device_status = "pending"
         self.remote_paused = False
+        self.device_online = False
         self._shutdown_requested = False
         self._restart_requested = False
         self._refresh_urls()
@@ -99,6 +53,7 @@ class PunchClient(QMainWindow):
             lambda wid, detail: logger.error("Worker %s failed:\n%s", wid, detail)
         )
         self.offline_mgr = OfflineManager()
+        self.retry_pending = bool(self.offline_mgr.load_all())
         self.reader = GlobalCardReader(threshold_ms=50)
 
         # 2. 綁定硬體信號 (強制 QueuedConnection 以解決執行緒衝突問題)
@@ -121,7 +76,7 @@ class PunchClient(QMainWindow):
 
         self.device_timer = QTimer(self)
         self.device_timer.timeout.connect(self._sync_device)
-        self.device_timer.start(30000)
+        self.device_timer.start(DEVICE_POLL_MS)
         self.shutdown_warning_timer = QTimer(self)
         self.shutdown_warning_timer.setSingleShot(True)
         self.shutdown_warning_timer.timeout.connect(self._warn_slow_shutdown)
@@ -134,7 +89,6 @@ class PunchClient(QMainWindow):
     def _refresh_urls(self):
         self.API_URL = self.identity.server_url + "/api/v1/punch"
         self.ADD_CARD_URL = self.identity.server_url + "/api/v1/cards/empty"
-        self.LOGIN_URL = self.identity.server_url + "/api/v1/login"
 
     def _sync_device(self):
         if self._shutdown_requested:
@@ -145,17 +99,35 @@ class PunchClient(QMainWindow):
         if state.get("registered") and not self.identity.registered:
             self.identity.mark_registered()
         if state.get("status") in ("pending", "approved", "disabled", "revoked"):
+            self.device_timer.setInterval(DEVICE_POLL_MS)
             old = self.device_status
+            was_online = self.device_online
+            self.device_online = True
             self.device_status = state["status"]
             self.remote_paused = bool(state.get("paused"))
+            if self.device_status != "approved" or self.remote_paused:
+                self._clear_enrollment()
+            elif state.get("enrollment"):
+                self.enrollment_credential = state["enrollment"]
+                self.enrollment_timer.start(30000)
+                self.tray.showMessage("新增卡片", "請在 30 秒內刷一張卡", QSystemTrayIcon.Information)
             if old != self.device_status:
                 self.tray.showMessage("讀卡端狀態", self.device_status, QSystemTrayIcon.Information)
+            if not was_online and self.retry_pending:
+                self._trigger_retry()
             if state.get("restart"):
                 self._restart_application()
         elif state.get("status") in ("registration_error", "auth_error"):
+            self.device_timer.setInterval(DEVICE_RETRY_MS)
+            self.device_online = False
+            self._clear_enrollment()
             self.device_status = "invalid"
             logger.error("Device registration failed: %s", state.get("message"))
             self.tray.showMessage("讀卡端驗證失敗", "請檢查伺服器位址或重新申請裝置", QSystemTrayIcon.Warning)
+        elif state.get("status") == "offline":
+            self.device_timer.setInterval(DEVICE_POLL_MS)
+            self.device_online = False
+            self._clear_enrollment()
 
     def _restart_application(self):
         logger.info("Remote restart command acknowledged; draining active work")
@@ -187,13 +159,6 @@ class PunchClient(QMainWindow):
         menu.addAction(server_act)
         menu.addSeparator()
 
-        # 新增模式切換
-        self.admin_act = QAction("管理員新增卡片模式", self, checkable=True)
-        self.admin_act.triggered.connect(self._toggle_admin_mode)
-        menu.addAction(self.admin_act)
-
-        menu.addSeparator()
-
         quit_act = QAction("退出系統", self)
         quit_act.triggered.connect(self._safe_exit)
         menu.addAction(quit_act)
@@ -213,8 +178,10 @@ class PunchClient(QMainWindow):
             QMessageBox.warning(self, "位址錯誤", "請輸入完整的 http:// 或 https:// 位址")
             return
         self.identity.set_server_url(url)
+        self._clear_enrollment()
         self._refresh_urls()
         self.device_status = "pending"
+        self.device_online = False
         self._sync_device()
 
     # ── Worker Signal Setup ──────────────────────────────────
@@ -224,12 +191,18 @@ class PunchClient(QMainWindow):
 
         def handle_success(result: dict):
             if result["status"] == "online":
+                if not self.device_online:
+                    self.device_timer.start(DEVICE_POLL_MS)
+                    self._sync_device()
+                if self.retry_pending:
+                    self._trigger_retry()
                 name = result.get('employee_name', result.get('uid'))
                 msg = f"{name} 於 {result.get('timestamp')} 打卡成功"
                 self.tray.showMessage("打卡成功", msg, QSystemTrayIcon.Information)
             elif result["status"] == "offline":
                 # 離線模式：由 OfflineManager 處理
                 self.offline_mgr.save_punch(result["uid"], result["timestamp"], self.identity.uuid)
+                self.retry_pending = True
                 self.tray.showMessage(
                     "離線暫存", "網路連線失敗，打卡資訊已儲存於本地", QSystemTrayIcon.Warning)
             else:
@@ -241,6 +214,7 @@ class PunchClient(QMainWindow):
         wid = RetryWorker.WORKER_ID
 
         def handle_success(res):
+            self.retry_pending = bool(self.offline_mgr.load_all())
             if res["success_count"] > 0:
                 self.tray.showMessage(
                     "補傳完成", f"已成功上傳 {res['success_count']} 筆離線紀錄",
@@ -249,82 +223,61 @@ class PunchClient(QMainWindow):
         self.worker_manager.on_success(wid, handle_success)
 
     def _setup_add_card_signals(self):
-        wid = AddCardWorker.WORKER_ID
-
-        def handle_success(result: dict):
-            if result["status"] == "success":
-                self.tray.showMessage(
-                    "新增成功", f"卡號 {result['uid']} 已註冊為空卡", QSystemTrayIcon.Information)
+        def handle_success(result):
+            status = result["status"]
+            uid = result["uid"]
+            if status == "success":
+                self.tray.showMessage("新增卡片成功", f"卡號 {uid} 已建立空卡", QSystemTrayIcon.Information)
+            elif status == "duplicate":
+                self.tray.showMessage("新增卡片失敗", f"卡號 {uid} 已存在", QSystemTrayIcon.Warning)
+            elif status == "unknown":
+                self.tray.showMessage("新增結果未確認", f"卡號 {uid} 的伺服器回應無法確認，請到管理頁查詢", QSystemTrayIcon.Warning)
             else:
-                self.tray.showMessage(
-                    "新增失敗", result["message"], QSystemTrayIcon.Critical)
+                self.tray.showMessage("新增卡片失敗", result["message"], QSystemTrayIcon.Warning)
 
-        self.worker_manager.on_success(wid, handle_success)
+        self.worker_manager.on_success(AddCardWorker.WORKER_ID, handle_success)
         self.worker_manager.on_error(
-            wid, lambda err: self.tray.showMessage("系統錯誤", str(err), QSystemTrayIcon.Critical))
+            AddCardWorker.WORKER_ID,
+            lambda _error: self.tray.showMessage("新增結果未確認", "請到管理頁查詢", QSystemTrayIcon.Warning),
+        )
 
     # ── Slots & Logic ────────────────────────────────────────
 
-    def _toggle_admin_mode(self, checked):
-        if self._shutdown_requested:
-            self.admin_act.setChecked(self.is_admin_mode)
-            return
-        if checked:
-            if self.device_status != "approved" or self.remote_paused:
-                self.admin_act.setChecked(False)
-                self.tray.showMessage("裝置未啟用", "請先由後台核准並啟用讀卡端", QSystemTrayIcon.Warning)
-                return
-            # 登入時暫停處理訊號，避免感應觸發打卡邏輯
-            self._reader_suspended = True
+    def _clear_enrollment(self):
+        self.enrollment_timer.stop()
+        self.enrollment_credential = ""
 
-            dialog = LoginDialog(self.LOGIN_URL, self)
-            result = dialog.exec()
-
-            # 對話框關閉後恢復處理
-            self._reader_suspended = False
-
-            if result == QDialog.Accepted:
-                self.admin_token = dialog.get_token()
-                self.is_admin_mode = True
-                logger.info("管理員新增卡片模式 已開啟")
-                self.tray.showMessage(
-                    "模式切換", "管理員新增卡片模式 已開啟", QSystemTrayIcon.Information)
-            else:
-                # 取消登入或失敗，強制取消勾選
-                self.admin_act.setChecked(False)
-                self.is_admin_mode = False
-        else:
-            self.admin_token = ""
-            self.is_admin_mode = False
-            self.tray.showMessage("模式切換", "管理員新增卡片模式 已關閉",
-                                  QSystemTrayIcon.Information)
+    def _enrollment_timed_out(self):
+        if self.enrollment_credential:
+            self._clear_enrollment()
+            self.tray.showMessage("新增卡片逾時", "30 秒內未刷卡，已返回打卡模式", QSystemTrayIcon.Warning)
 
     def _on_card_scanned(self, uid: str):
         if self._shutdown_requested:
             return
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        if self._reader_suspended or self.device_status != "approved" or self.remote_paused:
+        if self.device_status != "approved" or self.remote_paused:
             logger.info(f"[UI] 讀卡器已暫停，忽略卡號: {uid}")
             return
 
         logger.info(f"[UI] 感應卡號: {uid}")
 
-        if self.is_admin_mode:
-            if not self.admin_token:
-                self.tray.showMessage(
-                    "提示", "請先設定管理員 Token", QSystemTrayIcon.Warning)
-                return
-            worker = AddCardWorker(uid, self.ADD_CARD_URL, self.admin_token, self.identity)
+        if self.enrollment_credential:
+            credential = self.enrollment_credential
+            self._clear_enrollment()
+            worker = AddCardWorker(uid, self.ADD_CARD_URL, credential, self.identity)
         else:
             worker = PunchWorker(uid, now, self.API_URL, self.identity)
 
-        self.worker_manager.start(worker)
+        if not self.worker_manager.start(worker) and isinstance(worker, AddCardWorker):
+            self.tray.showMessage("新增卡片失敗", "讀卡端忙碌，請重新下達加卡命令", QSystemTrayIcon.Warning)
 
     def _trigger_retry(self):
         if self._shutdown_requested:
             return
-        if self.device_status == "approved" and not self.remote_paused and not self.worker_manager.is_running(RetryWorker.WORKER_ID):
+        if (self.retry_pending and self.device_status == "approved" and not self.remote_paused
+                and not self.worker_manager.is_running(RetryWorker.WORKER_ID)):
             worker = RetryWorker(self.API_URL, self.identity)
             self.worker_manager.start(worker)
 
@@ -332,6 +285,7 @@ class PunchClient(QMainWindow):
         self._begin_shutdown(restart=False)
 
     def _begin_shutdown(self, restart: bool):
+        self._clear_enrollment()
         if self._shutdown_requested:
             return
         self._shutdown_requested = True
@@ -367,7 +321,7 @@ class PunchClient(QMainWindow):
                 self._restart_requested = False
                 self.worker_manager.resume()
                 self.retry_timer.start(300000)
-                self.device_timer.start(30000)
+                self.device_timer.start(DEVICE_POLL_MS)
                 self.reader.start()
                 return
         else:

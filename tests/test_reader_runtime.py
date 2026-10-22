@@ -21,7 +21,7 @@ from reader.diagnostics import client_log_dir
 from reader.global_card_reader import GlobalCardReader
 from worker.worker_base import BaseWorker
 from worker.worker_manager import WorkerManager
-from worker.punch_worker import PunchWorker
+from worker.punch_worker import PunchWorker, RetryWorker, AddCardWorker
 
 
 APP = QApplication.instance() or QApplication([])
@@ -52,8 +52,11 @@ class GateWorker(BaseWorker):
 
 
 class FakeTray:
+    def __init__(self):
+        self.messages = []
+
     def showMessage(self, *args):
-        pass
+        self.messages.append(args)
 
 
 class FakeIdentity:
@@ -69,6 +72,9 @@ class FakeOfflineManager:
 
     def save_punch(self, uid, timestamp, device_uuid):
         self.saved.append((uid, timestamp, device_uuid))
+
+    def load_all(self):
+        return list(self.saved)
 
 
 class FakeReader(QObject):
@@ -93,6 +99,73 @@ class TestClient(reader_client.PunchClient):
 
 
 class ReaderRuntimeTests(unittest.TestCase):
+    def test_add_card_worker_reports_signed_server_result(self):
+        from device_protocol import response_signature
+
+        def run(status):
+            def respond(request):
+                body = b'{"detail":"test"}' if status != 200 else b'{"status":"ok"}'
+                signature = response_signature(FakeIdentity.secret,
+                                               request.headers["X-Device-Nonce"], status, body)
+                return httpx.Response(status, content=body,
+                                      headers={"X-Device-Response-Signature": signature})
+            real_client = httpx.Client
+            with patch("worker.punch_worker.httpx.Client",
+                       side_effect=lambda **kwargs: real_client(transport=httpx.MockTransport(respond))):
+                return AddCardWorker("1234", "http://example.test/api/v1/cards/empty",
+                                     "a" * 64, FakeIdentity()).execute()
+
+        self.assertEqual(run(200)["status"], "success")
+        self.assertEqual(run(400)["status"], "duplicate")
+        self.assertEqual(run(403)["status"], "error")
+
+        real_client = httpx.Client
+        with patch("worker.punch_worker.httpx.Client",
+                   side_effect=lambda **kwargs: real_client(transport=httpx.MockTransport(
+                       lambda request: httpx.Response(200, json={"status": "ok"})))):
+            self.assertEqual(AddCardWorker("1234", "http://example.test/api/v1/cards/empty",
+                                           "a" * 64, FakeIdentity()).execute()["status"], "unknown")
+
+    def test_recovery_triggers_pending_retry_without_waiting_for_timer(self):
+        offline = FakeOfflineManager()
+        offline.save_punch("1234", "2026-10-20 10:00:00", FakeIdentity.uuid)
+        with (patch.object(reader_client, "DeviceIdentity", return_value=FakeIdentity()),
+              patch.object(reader_client, "OfflineManager", return_value=offline),
+              patch.object(reader_client, "GlobalCardReader", FakeReader)):
+            client = TestClient()
+            try:
+                with patch.object(client, "_trigger_retry") as retry, patch.object(client, "_sync_device") as sync:
+                    client._on_device_sync({"status": "approved", "paused": False})
+                    retry.assert_called_once()
+                    client._on_device_sync({"status": "offline"})
+                    self.assertEqual(client.device_timer.interval(), reader_client.DEVICE_POLL_MS)
+                    client._on_device_sync({"status": "auth_error", "message": "invalid"})
+                    self.assertEqual(client.device_timer.interval(), reader_client.DEVICE_RETRY_MS)
+                    client._on_device_sync({"status": "approved", "paused": False})
+                    self.assertEqual(retry.call_count, 2)
+                    client._on_device_sync({"status": "offline"})
+                    client.worker_manager.any_success.emit(
+                        PunchWorker.WORKER_ID,
+                        {"status": "online", "uid": "5678", "timestamp": "2026-10-20 10:01:00"},
+                    )
+                    self.assertEqual(client.device_timer.interval(), reader_client.DEVICE_POLL_MS)
+                    sync.assert_called_once()
+                    self.assertEqual(retry.call_count, 3)
+            finally:
+                client.reader.stop()
+
+    def test_offline_retry_stops_after_first_connection_failure(self):
+        pending = [{"uid": str(i), "timestamp": "2026-10-20 10:00:00",
+                    "device_uuid": FakeIdentity.uuid} for i in range(3)]
+        manager = type("FakeManager", (), {"load_all": lambda self: pending,
+                                          "remove_punches": lambda self, items: None})()
+        failure = httpx.ConnectTimeout("simulated timeout")
+        with (patch("worker.punch_worker.OfflineManager", return_value=manager),
+              patch("worker.punch_worker.signed_request", side_effect=failure) as send):
+            self.assertEqual(RetryWorker("http://example.test/api/v1/punch", FakeIdentity()).execute(),
+                             {"success_count": 0})
+        self.assertEqual(send.call_count, 1)
+
     def test_network_timeout_becomes_offline_punch(self):
         def timeout(request):
             raise httpx.ConnectTimeout("simulated timeout", request=request)
@@ -193,6 +266,59 @@ class ReaderRuntimeTests(unittest.TestCase):
                     launch.assert_called_once()
             finally:
                 gate.set()
+                spin_until(lambda: not client.worker_manager.has_workers())
+                client.reader.stop()
+
+    def test_remote_enrollment_consumes_first_scan_without_punch(self):
+        submitted = []
+        class FakeAddCard(GateWorker):
+            WORKER_ID = "add_card_task"
+            def __init__(self, uid, api_url, credential, identity):
+                submitted.append((uid, credential))
+                gate = threading.Event()
+                gate.set()
+                super().__init__(gate, {"status": "success", "uid": uid})
+
+        class FakePunch(GateWorker):
+            WORKER_ID = "punch_task"
+            started = 0
+            def __init__(self, uid, timestamp, api_url, identity):
+                type(self).started += 1
+                gate = threading.Event()
+                gate.set()
+                super().__init__(gate, {"status": "error", "message": "test"})
+
+        with (patch.object(reader_client, "DeviceIdentity", return_value=FakeIdentity()),
+              patch.object(reader_client, "OfflineManager", return_value=FakeOfflineManager()),
+              patch.object(reader_client, "GlobalCardReader", FakeReader),
+              patch.object(reader_client, "AddCardWorker", FakeAddCard),
+              patch.object(reader_client, "PunchWorker", FakePunch)):
+            client = TestClient()
+            try:
+                client._on_device_sync({"status": "approved", "paused": False,
+                                        "enrollment": "a" * 64})
+                self.assertEqual(client.device_timer.interval(), reader_client.DEVICE_POLL_MS)
+                client._on_card_scanned("1234")
+                self.assertEqual(submitted, [("1234", "a" * 64)])
+                self.assertFalse(client.enrollment_credential)
+                self.assertEqual(FakePunch.started, 0)
+                self.assertTrue(spin_until(lambda: not client.worker_manager.has_workers()))
+                self.assertTrue(any(message[0] == "新增卡片成功" for message in client.tray.messages))
+                client.worker_manager.any_success.emit(
+                    FakeAddCard.WORKER_ID, {"status": "duplicate", "uid": "1234"})
+                self.assertTrue(any(message[0] == "新增卡片失敗" for message in client.tray.messages))
+                client._on_card_scanned("5678")
+                self.assertEqual(FakePunch.started, 1)
+                client._on_device_sync({"status": "approved", "paused": False,
+                                        "enrollment": "b" * 64})
+                client.enrollment_timer.timeout.emit()
+                self.assertFalse(client.enrollment_credential)
+                self.assertTrue(any(message[0] == "新增卡片逾時" for message in client.tray.messages))
+                client._on_device_sync({"status": "offline"})
+                self.assertEqual(client.device_timer.interval(), reader_client.DEVICE_POLL_MS)
+                client._on_device_sync({"status": "approved", "paused": False})
+                self.assertEqual(client.device_timer.interval(), reader_client.DEVICE_POLL_MS)
+            finally:
                 spin_until(lambda: not client.worker_manager.has_workers())
                 client.reader.stop()
 

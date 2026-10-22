@@ -27,11 +27,14 @@ class DeviceSyncWorker(BaseWorker):
                 state = response.json()
                 state["registered"] = registration_complete
                 for command in state.get("commands", []):
-                    if command["kind"] == "restart":
+                    if command["kind"] in ("restart", "enroll_card"):
                         ack = signed_request(client, "POST", base + f"/me/commands/{command['id']}/ack",
                                              self.identity.uuid, self.identity.secret)
                         if ack.status_code == 200:
-                            state["restart"] = True
+                            if command["kind"] == "restart":
+                                state["restart"] = True
+                            elif isinstance(command.get("credential"), str) and len(command["credential"]) == 64:
+                                state["enrollment"] = command["credential"]
                 return state
         except ValueError as exc:
             return {"status": "auth_error", "message": str(exc), "registered": registration_complete}

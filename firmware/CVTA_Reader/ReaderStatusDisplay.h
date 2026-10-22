@@ -14,7 +14,7 @@ struct ReaderStatusPalette {
 
 inline ReaderStatusPalette readerStatusPalette(const String &status) {
   // These dark RGB565 fills all exceed 4.5:1 contrast against white text.
-  if (status == "OK" || status == "SAVED" || status == "UID MATCH") {
+  if (status == "OK" || status == "SAVED" || status == "UID MATCH" || status == "CARD ADDED") {
     return {0x03A0, 0xFFFF, 0xFFFF, false};  // green: saved/accepted
   }
   if (status == "OFFLINE SAVED" || status == "OFFLINE") {
@@ -23,7 +23,7 @@ inline ReaderStatusPalette readerStatusPalette(const String &status) {
   if (status == "READY") {
     return {0x0000, 0xFFFF, 0x07FF, false};  // black, cyan clock
   }
-  if (status == "CVTA READER" || status == "BLE PAIR" || status == "PENDING" ||
+  if (status == "CVTA READER" || status == "BLE PAIR" || status == "PENDING" || status == "ADD CARD" ||
       status == "TAP KNOWN CARD" || status == "RESTARTING") {
     return {0x0000, 0xFFFF, 0xFFFF, false};  // neutral
   }

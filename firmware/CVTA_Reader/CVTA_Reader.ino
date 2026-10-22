@@ -30,7 +30,8 @@ constexpr uint8_t TFT_CS = 26;
 constexpr uint8_t TFT_DC = 21;
 constexpr uint8_t TFT_RST = 22;
 constexpr size_t QUEUE_LIMIT = 256;
-constexpr uint32_t STATE_POLL_MS = 30000;
+constexpr uint32_t STATE_POLL_MS = 5000;
+constexpr uint32_t STATE_RETRY_MS = 30000;
 constexpr uint32_t RETRY_MS = 10000;
 constexpr int64_t MAX_TIME_AGE_US = 24LL * 60 * 60 * 1000000;
 
@@ -41,6 +42,7 @@ GFXcanvas16 statusCanvas(128, 76);
 uint16_t shownBackground = 0x0000;
 String wifiSsid, wifiPassword, serverUrl, deviceName, deviceUuid, deviceSecret;
 String serialLine, expectedUid, statusText, statusDetail;
+String enrollmentCredential;
 bool filesystemReady = false;
 bool settingsReady = false;
 bool cryptoReady = false;
@@ -51,15 +53,19 @@ bool paused = false;
 bool authBlocked = false;
 bool cardLatched = false;
 bool calibrationPending = false;
+bool previousWifiConnected = false;
+bool previousTimeReady = false;
 uint8_t uidOrder = 0; // 0 = unset, 1 = RC522 order, 2 = reversed bytes
 uint32_t nextQueueId = 1;
 uint32_t lastPoll = 0;
+uint32_t pollInterval = STATE_POLL_MS;
 uint32_t lastRetry = 0;
 uint32_t lastWifiAttempt = 0;
 uint32_t cardAbsentSince = 0;
 uint32_t calibrationStarted = 0;
 uint32_t lastClockRefresh = 0;
 uint32_t statusShownAt = 0;
+uint32_t enrollmentStarted = 0;
 portMUX_TYPE timeMux = portMUX_INITIALIZER_UNLOCKED;
 volatile int64_t lastNtpUptimeUs = 0;
 
@@ -391,11 +397,13 @@ void connectWifi() {
 }
 
 void maintainWifi() {
-  if (WiFi.status() == WL_CONNECTED && !ntpConfigured) {
+  bool connected = WiFi.status() == WL_CONNECTED;
+  if (!connected) ntpConfigured = false;
+  if (connected && !ntpConfigured) {
     configTime(8 * 3600, 0, "pool.ntp.org", "time.google.com");
     ntpConfigured = true;
   }
-  if (WiFi.status() != WL_CONNECTED && wifiSsid.length() && millis() - lastWifiAttempt >= 15000) {
+  if (!connected && wifiSsid.length() && millis() - lastWifiAttempt >= 15000) {
     connectWifi();
   }
 }
@@ -457,41 +465,63 @@ bool registerDevice() {
   return code == 200;
 }
 
-void pollDevice() {
+bool pollDevice() {
   if (!settingsReady || !cryptoReady || WiFi.status() != WL_CONNECTED || !timeReady() ||
-      !validServerUrl(serverUrl) || authBlocked) return;
-  if (!registered && !registerDevice()) return;
+      !validServerUrl(serverUrl) || authBlocked) return false;
+  if (!registered && !registerDevice()) return false;
   ApiReply reply = signedRequest("GET", "/api/v1/devices/me");
   if (!reply.verified) {
     if (reply.code > 0) showStatus("AUTH ERROR");
-    return;
+    return false;
   }
   if (reply.code == 401 || reply.code == 403) {
     authBlocked = true;
     approved = false;
     settings.putBool("approved", false);
     showStatus("DENIED");
-    return;
+    return false;
   }
-  if (reply.code != 200) return;
+  if (reply.code != 200) return false;
   JsonDocument doc;
-  if (deserializeJson(doc, reply.body) || !doc["status"].is<const char *>() || !doc["paused"].is<bool>()) return;
+  if (deserializeJson(doc, reply.body) || !doc["status"].is<const char *>() || !doc["paused"].is<bool>()) return false;
   String state = doc["status"].as<String>();
   approved = state == "approved";
   paused = doc["paused"].as<bool>();
+  if (!approved || paused) enrollmentCredential = "";
   if (state == "revoked") authBlocked = true;
   registered = true;
   settings.putBool("registered", true);
   settings.putBool("approved", approved);
   settings.putBool("paused", paused);
-  if (state == "pending") showStatus("PENDING", currentClock());
-  else if (!approved || paused) showStatus("DENIED", state);
-  else showStatus("READY", currentClock());
+  if (state == "pending") {
+    if (statusText != "PENDING") showStatus("PENDING", currentClock());
+  } else if (!approved || paused) {
+    if (statusText != "DENIED" || statusDetail != state) showStatus("DENIED", state);
+  } else if (enrollmentCredential.isEmpty()) {
+    bool recentFeedback = (statusText == "OK" || statusText == "SAVED" || statusText == "OFFLINE SAVED" ||
+                           statusText == "CARD ADDED" || statusText == "CARD EXISTS" ||
+                           statusText == "ADD FAILED" || statusText == "ADD UNKNOWN" ||
+                           statusText == "ADD TIMEOUT") &&
+                          millis() - statusShownAt < 3000;
+    if (statusText != "READY" && !recentFeedback) showStatus("READY", currentClock());
+  }
 
   if (approved && doc["commands"].is<JsonArray>()) {
     for (JsonObject command : doc["commands"].as<JsonArray>()) {
-      if (command["kind"] != "restart" || !command["id"].is<int>()) continue;
+      if (!command["id"].is<int>()) continue;
       int id = command["id"].as<int>();
+      if (command["kind"] == "enroll_card") {
+        String credential = command["credential"].as<String>();
+        if (uidOrder == 0 || credential.length() != 64 || paused) continue;
+        ApiReply ack = signedRequest("POST", "/api/v1/devices/me/commands/" + String(id) + "/ack");
+        if (ack.verified && ack.code == 200) {
+          enrollmentCredential = credential;
+          enrollmentStarted = millis();
+          showStatus("ADD CARD", "30 SEC");
+        }
+        continue;
+      }
+      if (command["kind"] != "restart") continue;
       ApiReply ack = signedRequest("POST", "/api/v1/devices/me/commands/" + String(id) + "/ack");
       if (ack.verified && ack.code == 200) {
         showStatus("RESTARTING");
@@ -500,6 +530,7 @@ void pollDevice() {
       }
     }
   }
+  return true;
 }
 
 String queuePath(uint32_t id, const char *extension) {
@@ -615,7 +646,7 @@ void retryOne() {
     approved = false;
     settings.putBool("approved", false);
     showStatus("DENIED", "CHECK DEVICE");
-    if (!authBlocked) lastPoll = millis() - STATE_POLL_MS;
+    if (!authBlocked) lastPoll = millis() - pollInterval;
   } else if (reply.code == 400 || reply.code == 404) {
     if (!LittleFS.rename(path, queuePath(id, "bad"))) showStatus("STORAGE ERROR");
     else showStatus("PUNCH ERROR", String(reply.code));
@@ -670,6 +701,22 @@ void scanCard() {
     else { uidOrder = 0; showStatus("UID MISMATCH"); return; }
     settings.putUChar("uid-order", uidOrder);
     showStatus("UID MATCH", uidOrder == 1 ? "NORMAL" : "REVERSED");
+    return;
+  }
+  if (!enrollmentCredential.isEmpty()) {
+    String credential = enrollmentCredential;
+    enrollmentCredential = "";
+    showStatus("READY", currentClock());
+    JsonDocument payload;
+    payload["uid"] = uidOrder == 1 ? forward : reverse;
+    payload["credential"] = credential;
+    String body;
+    serializeJson(payload, body);
+    ApiReply result = signedRequest("POST", "/api/v1/cards/empty", body);
+    if (!result.verified) showStatus("ADD UNKNOWN", "CHECK ADMIN");
+    else if (result.code == 200) showStatus("CARD ADDED", payload["uid"].as<String>());
+    else if (result.code == 400) showStatus("CARD EXISTS", payload["uid"].as<String>());
+    else showStatus("ADD FAILED", "HTTP " + String(result.code));
     return;
   }
   if (uidOrder == 0) { showStatus("SET UID ORDER"); return; }
@@ -748,6 +795,7 @@ void processCommand(String line, Print &out) {
     settings.putString("name", deviceName);
     out.println("Name saved. Rename an already registered device in the admin UI.");
   } else if (line.startsWith("calibrate ")) {
+    enrollmentCredential = "";
     expectedUid = line.substring(10);
     expectedUid.trim(); expectedUid.toUpperCase();
     uint8_t bytes[10];
@@ -781,7 +829,7 @@ void processCommand(String line, Print &out) {
     uint32_t id = strtoul(line.substring(12).c_str(), nullptr, 10);
     if (!id || !LittleFS.remove(queuePath(id, "bad"))) out.println("Bad event not found.");
     else out.println("Bad event discarded.");
-  } else if (line == "poll") { lastPoll = millis() - STATE_POLL_MS; }
+  } else if (line == "poll") { lastPoll = millis() - pollInterval; }
   else if (line.length()) out.println("Unknown command. Type help.");
 }
 
@@ -852,33 +900,57 @@ void setup() {
   else if (uidOrder == 0) showStatus("SET UID ORDER");
   else if (wifiSsid.isEmpty() || serverUrl.isEmpty()) showStatus("SET NETWORK");
   else showStatus("TIME UNSYNC");
-  lastPoll = millis() - STATE_POLL_MS;
+  lastPoll = millis() - pollInterval;
 }
 
 void loop() {
   readSerial();
   readBle();
   maintainWifi();
-  if (millis() - lastPoll >= STATE_POLL_MS) {
+  bool wifiConnected = WiFi.status() == WL_CONNECTED;
+  bool clockReady = timeReady();
+  if (wifiConnected && !previousWifiConnected) lastPoll = millis() - pollInterval;
+  if (clockReady && !previousTimeReady) {
+    lastPoll = millis() - pollInterval;
+    if (statusText == "TIME UNSYNC") {
+      showStatus(approved && !paused ? "READY" : "PENDING", currentClock());
+    }
+  }
+  if (!wifiConnected && previousWifiConnected && statusText == "READY") {
+    showStatus("OFFLINE", currentClock());
+  }
+  previousWifiConnected = wifiConnected;
+  previousTimeReady = clockReady;
+  if (!enrollmentCredential.isEmpty() &&
+      (!wifiConnected || !clockReady || millis() - enrollmentStarted >= 30000)) {
+    bool timedOut = wifiConnected && clockReady && millis() - enrollmentStarted >= 30000;
+    enrollmentCredential = "";
+    showStatus(timedOut ? "ADD TIMEOUT" : "READY", currentClock());
+  }
+  if (wifiConnected && clockReady && settingsReady && cryptoReady && !authBlocked &&
+      validServerUrl(serverUrl) && millis() - lastPoll >= pollInterval) {
     lastPoll = millis();
-    pollDevice();
+    pollInterval = pollDevice() ? STATE_POLL_MS : STATE_RETRY_MS;
   }
   scanCard();
-  if (millis() - lastRetry >= RETRY_MS) {
+  if (enrollmentCredential.isEmpty() && millis() - lastRetry >= RETRY_MS) {
     lastRetry = millis();
     retryOne();
   }
   if (!timeReady() && statusText != "TIME UNSYNC" && uidOrder && approved && !paused) {
     showStatus("TIME UNSYNC");
   }
-  if ((statusText == "OK" || statusText == "SAVED" || statusText == "OFFLINE SAVED") &&
+  if ((statusText == "OK" || statusText == "SAVED" || statusText == "OFFLINE SAVED" ||
+       statusText == "CARD ADDED" || statusText == "CARD EXISTS" ||
+       statusText == "ADD FAILED" || statusText == "ADD UNKNOWN" ||
+       statusText == "ADD TIMEOUT") &&
       millis() - statusShownAt >= 3000 && approved && !paused && !authBlocked &&
       uidOrder && timeReady()) {
     showStatus("READY", currentClock());
   }
-  if (statusText == "READY" && millis() - lastClockRefresh >= 1000) {
+  if ((statusText == "READY" || statusText == "PENDING") && millis() - lastClockRefresh >= 1000) {
     lastClockRefresh = millis();
-    tftShow("READY", currentClock());
+    tftShow(statusText, currentClock());
   }
   delay(20);
 }
