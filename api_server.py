@@ -101,6 +101,7 @@ class PasswordChangeRequest(BaseModel):
 
 class CardCreateRequest(BaseModel):
     uid: str
+    credential: str
 
 
 class ManualRecordRequest(BaseModel):
@@ -563,11 +564,11 @@ async def get_unassigned_cards(_=Depends(verify_token)):
 
 
 @app.post("/api/v1/cards/empty")
-async def add_empty_card(req: CardCreateRequest, _=Depends(verify_token), __=Depends(active_device)):
+async def add_empty_card(req: CardCreateRequest, device_uuid: str = Depends(active_device)):
     """新增一張無人使用的空卡"""
-    success, message = HRManager.add_empty_card(req.uid)
+    success, message = DeviceManager.add_card_once(device_uuid, req.credential, req.uid)
     if not success:
-        raise HTTPException(status_code=400, detail=message)
+        raise HTTPException(status_code=400 if message == "卡號已存在" else 403, detail=message)
     return {"status": "ok", "message": message}
 
 
@@ -613,11 +614,19 @@ async def update_device(device_uuid: str, req: DeviceUpdateRequest, _=Depends(ve
 
 @app.post("/api/v1/devices/{device_uuid}/commands")
 async def send_device_command(device_uuid: str, req: DeviceCommandRequest, _=Depends(verify_token)):
-    if req.kind not in ("pause", "resume", "restart"):
+    if req.kind not in ("pause", "resume", "restart", "enroll_card"):
         raise HTTPException(status_code=400, detail="Invalid command")
     result = DeviceManager.command(device_uuid, req.kind)
     if not result:
         raise HTTPException(status_code=404, detail="Approved device not found")
+    return result
+
+
+@app.get("/api/v1/devices/{device_uuid}/commands/{command_id}")
+async def get_enrollment_result(device_uuid: str, command_id: int, _=Depends(verify_token)):
+    result = DeviceManager.enrollment_result(device_uuid, command_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Enrollment command not found")
     return result
 
 # ── 系統維護 ──────────────────────────────────────────────────

@@ -106,6 +106,10 @@ class DeviceCommand(Base):
     created_at = Column(DateTime, nullable=False, default=utcnow_naive)
     expires_at = Column(DateTime, nullable=False)
     acknowledged_at = Column(DateTime)
+    token = Column(String(64))
+    consumed_at = Column(DateTime)
+    result_code = Column(String(16))
+    result_uid = Column(String(50))
 
 
 class Holiday(Base):
