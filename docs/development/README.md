@@ -26,4 +26,6 @@
 | Windows 讀卡端與離線補送 | `reader_client.py`、`reader/`、`worker/` |
 | ESP32 韌體 | `firmware/CVTA_Reader/`，另見[韌體指南](../../firmware/GUIDE.md) |
 
+桌面端只有以 `--dev-mode` 啟動才顯示「測試模式 → 模擬讀卡」。模擬讀卡只替代讀卡機輸入；後續仍走 `PunchClient._on_card_scanned`、裝置核准檢查、簽章請求與離線補送。操作方法見[設定桌面讀卡端](../operations/desktop-reader.md#測試模式與模擬讀卡)。
+
 熱庫 schema 目前為第 3 版；未知結構會阻止後端啟動。年度歸檔函式存在，但目前未見自動呼叫。更動資料結構時，連同[備份與還原](../operations/backup.md)一起檢查。遠端新增卡片使用裝置命令與一次性憑證，詳見[裝置協定](../DEPLOYMENT_AND_PROTOCOL.md#遠端新增空卡)。

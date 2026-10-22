@@ -4,7 +4,7 @@ import logging
 from reader.diagnostics import setup_client_diagnostics
 
 from datetime import datetime
-from PySide6.QtWidgets import QApplication, QMainWindow, QSystemTrayIcon, QMenu
+from PySide6.QtWidgets import QApplication, QMainWindow, QSystemTrayIcon, QMenu, QInputDialog, QMessageBox
 from PySide6.QtGui import QIcon, QAction
 from PySide6.QtCore import QTimer, Qt, QProcess, Slot
 
@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 DEVICE_POLL_MS = 5000
 DEVICE_RETRY_MS = 30000
 
+
+def client_arguments(argv):
+    return "--dev-mode" in argv[1:], [argv[0], *(arg for arg in argv[1:] if arg != "--dev-mode")]
+
+
 def resource_path(relative_path):
     """ 取得資源檔案的絕對路徑，相容於 PyInstaller 打包後的環境 """
     try:
@@ -30,9 +35,10 @@ def resource_path(relative_path):
 
 
 class PunchClient(QMainWindow):
-    def __init__(self):
+    def __init__(self, dev_mode=False):
         super().__init__()
         self.setWindowTitle("Punch System Client")
+        self.dev_mode = dev_mode
 
         self.enrollment_credential = ""
         self.enrollment_timer = QTimer(self)
@@ -138,6 +144,8 @@ class PunchClient(QMainWindow):
             executable, args = sys.executable, []
         else:
             executable, args = sys.executable, [os.path.abspath(__file__)]
+        if self.dev_mode:
+            args.append("--dev-mode")
         try:
             started = QProcess.startDetached(executable, args)
         except Exception:
@@ -157,6 +165,11 @@ class PunchClient(QMainWindow):
         server_act = QAction("設定伺服器位址", self)
         server_act.triggered.connect(self._set_server_url)
         menu.addAction(server_act)
+        if self.dev_mode:
+            test_menu = QMenu("測試模式", menu)
+            menu.addMenu(test_menu)
+            simulate_act = test_menu.addAction("模擬讀卡")
+            simulate_act.triggered.connect(self._simulate_card_scan)
         menu.addSeparator()
 
         quit_act = QAction("退出系統", self)
@@ -169,7 +182,6 @@ class PunchClient(QMainWindow):
     def _set_server_url(self):
         if self._shutdown_requested:
             return
-        from PySide6.QtWidgets import QInputDialog, QMessageBox
         url, ok = QInputDialog.getText(self, "伺服器位址", "內網伺服器 URL", text=self.identity.server_url)
         if not ok:
             return
@@ -183,6 +195,26 @@ class PunchClient(QMainWindow):
         self.device_status = "pending"
         self.device_online = False
         self._sync_device()
+
+    def _simulate_card_scan(self):
+        if not self.dev_mode or self._shutdown_requested:
+            return
+        # The global keyboard listener must not mistake typing in this dialog for a card scan.
+        self.reader.stop()
+        try:
+            uid, ok = QInputDialog.getText(
+                self, "模擬讀卡", "輸入卡號（讀卡程式處理後的 UID）："
+            )
+        finally:
+            if not self._shutdown_requested:
+                self.reader.start()
+        if self._shutdown_requested or not ok:
+            return
+        uid = uid.strip()
+        if not uid:
+            QMessageBox.warning(self, "卡號錯誤", "請輸入卡號")
+            return
+        self._on_card_scanned(uid)
 
     # ── Worker Signal Setup ──────────────────────────────────
 
@@ -335,7 +367,8 @@ class PunchClient(QMainWindow):
 if __name__ == "__main__":
     client_log_dir = setup_client_diagnostics()
     logger.info("Desktop reader starting; logs=%s", client_log_dir)
-    app = QApplication(sys.argv)
+    dev_mode, qt_argv = client_arguments(sys.argv)
+    app = QApplication(qt_argv)
     app.setQuitOnLastWindowClosed(False)
-    client = PunchClient()
+    client = PunchClient(dev_mode=dev_mode)
     sys.exit(app.exec())

@@ -82,12 +82,14 @@ class FakeReader(QObject):
 
     def __init__(self, threshold_ms=50):
         super().__init__()
+        self.starts = 0
+        self.stops = 0
 
     def start(self):
-        pass
+        self.starts += 1
 
     def stop(self):
-        pass
+        self.stops += 1
 
 
 class TestClient(reader_client.PunchClient):
@@ -98,7 +100,59 @@ class TestClient(reader_client.PunchClient):
         self.tray = FakeTray()
 
 
+class MenuTestClient(reader_client.PunchClient):
+    def _sync_device(self):
+        pass
+
+
 class ReaderRuntimeTests(unittest.TestCase):
+    def test_dev_mode_requires_startup_flag(self):
+        self.assertEqual(reader_client.client_arguments(["reader_client.exe"]),
+                         (False, ["reader_client.exe"]))
+        self.assertEqual(reader_client.client_arguments(["reader_client.exe", "--dev-mode", "-platform", "offscreen"]),
+                         (True, ["reader_client.exe", "-platform", "offscreen"]))
+
+    def test_simulated_scan_uses_card_scan_path(self):
+        with (patch.object(reader_client, "DeviceIdentity", return_value=FakeIdentity()),
+              patch.object(reader_client, "OfflineManager", return_value=FakeOfflineManager()),
+              patch.object(reader_client, "GlobalCardReader", FakeReader)):
+            client = MenuTestClient()
+            try:
+                self.assertFalse(any(action.text() == "測試模式"
+                                     for action in client.tray.contextMenu().actions()))
+                with patch.object(reader_client.QInputDialog, "getText") as dialog:
+                    client._simulate_card_scan()
+                    dialog.assert_not_called()
+            finally:
+                client.reader.stop()
+
+            client = MenuTestClient(dev_mode=True)
+            try:
+                with patch.object(reader_client.QProcess, "startDetached", return_value=True) as launch:
+                    self.assertTrue(client._launch_replacement())
+                    self.assertEqual(launch.call_args.args[1][-1], "--dev-mode")
+                test_menu = next(action.menu() for action in client.tray.contextMenu().actions()
+                                 if action.text() == "測試模式")
+                (simulate,) = test_menu.actions()
+                self.assertTrue(simulate.isVisible())
+                with patch.object(reader_client.QInputDialog, "getText", return_value=(" 1234 ", True)), \
+                     patch.object(client, "_on_card_scanned") as scanned:
+                    simulate.trigger()
+                    scanned.assert_called_once_with("1234")
+                self.assertEqual((client.reader.starts, client.reader.stops), (2, 1))
+                with patch.object(reader_client.QInputDialog, "getText", return_value=("", False)), \
+                     patch.object(client, "_on_card_scanned") as scanned:
+                    simulate.trigger()
+                    scanned.assert_not_called()
+                with patch.object(reader_client.QInputDialog, "getText", return_value=("  ", True)), \
+                     patch.object(reader_client.QMessageBox, "warning") as warning, \
+                     patch.object(client, "_on_card_scanned") as scanned:
+                    simulate.trigger()
+                    warning.assert_called_once()
+                    scanned.assert_not_called()
+            finally:
+                client.reader.stop()
+
     def test_add_card_worker_reports_signed_server_result(self):
         from device_protocol import response_signature
 
