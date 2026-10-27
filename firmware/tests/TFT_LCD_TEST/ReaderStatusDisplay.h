@@ -13,17 +13,24 @@ struct ReaderStatusPalette {
 };
 
 inline ReaderStatusPalette readerStatusPalette(const String &status) {
-  // These dark RGB565 fills all exceed 4.5:1 contrast against white text.
-  if (status == "OK" || status == "SAVED" || status == "UID MATCH") {
-    return {0x03A0, 0xFFFF, 0xFFFF, false};  // green: saved/accepted
+  // All colored RGB565 fills keep white text above 4.5:1 contrast.
+  if (status == "OK" || status == "UID MATCH" || status == "CARD ADDED") {
+    return {0x03A0, 0xFFFF, 0xFFFF, false};  // green: final confirmed success
   }
-  if (status == "OFFLINE SAVED" || status == "OFFLINE") {
-    return {0x8A00, 0xFFFF, 0xFFFF, false};  // amber: stored, network pending
+  if (status == "SAVED") {
+    return {0x8B40, 0xFFFF, 0xFFFF, false};  // warm yellow: local step done, server pending
+  }
+  if (status == "OFFLINE SAVED" || status == "OFFLINE" || status == "PENDING" ||
+      status == "TIME UNSYNC" || status == "SET NETWORK" ||
+      status == "SET UID ORDER" || status == "CARD EXISTS" ||
+      status == "ADD UNKNOWN" || status == "ADD TIMEOUT" ||
+      status == "CAL TIMEOUT") {
+    return {0xA180, 0xFFFF, 0xFFFF, false};  // orange: warning/action needed
   }
   if (status == "READY") {
     return {0x0000, 0xFFFF, 0x07FF, false};  // black, cyan clock
   }
-  if (status == "CVTA READER" || status == "BLE PAIR" || status == "PENDING" ||
+  if (status == "CVTA READER" || status == "BLE PAIR" || status == "ADD CARD" ||
       status == "TAP KNOWN CARD" || status == "RESTARTING") {
     return {0x0000, 0xFFFF, 0xFFFF, false};  // neutral
   }
