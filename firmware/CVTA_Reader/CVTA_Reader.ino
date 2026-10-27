@@ -42,6 +42,7 @@ constexpr size_t QUEUE_LIMIT = 256;
 constexpr uint32_t STATE_POLL_MS = 5000;
 constexpr uint32_t STATE_RETRY_MS = 30000;
 constexpr uint32_t RETRY_MS = 10000;
+constexpr uint32_t FRAME_PREVIEW_MS = 30000;
 constexpr int64_t MAX_TIME_AGE_US = 24LL * 60 * 60 * 1000000;
 
 Preferences settings;
@@ -73,12 +74,15 @@ uint32_t nextQueueId = 1;
 uint32_t lastPoll = 0;
 uint32_t pollInterval = STATE_POLL_MS;
 uint32_t lastRetry = 0;
+uint32_t foregroundPunchId = 0;
 uint32_t lastWifiAttempt = 0;
 uint32_t cardAbsentSince = 0;
 uint32_t calibrationStarted = 0;
 uint32_t lastClockRefresh = 0;
 uint32_t statusShownAt = 0;
 uint32_t enrollmentStarted = 0;
+uint32_t framePreviewStarted = 0;
+bool framePreviewActive = false;
 portMUX_TYPE timeMux = portMUX_INITIALIZER_UNLOCKED;
 volatile int64_t lastNtpUptimeUs = 0;
 
@@ -305,6 +309,42 @@ void tftShow(const String &top, const String &bottom) {
   readerDrawStatus(tft, statusCanvas, top, bottom, shownBackground);
 }
 
+void drawFramePreview() {
+  tft.fillScreen(0x0000);
+  tft.drawRect(0, 0, 128, 128, 0xFFFF);
+  tft.fillRect(2, 2, 8, 8, 0xF800);      // top left: red
+  tft.fillRect(118, 2, 8, 8, 0x07E0);    // top right: green
+  tft.fillRect(2, 118, 8, 8, 0x001F);    // bottom left: blue
+  tft.fillRect(118, 118, 8, 8, 0xFFE0);  // bottom right: yellow
+  tft.setTextWrap(false);
+  tft.setTextSize(1);
+  tft.setTextColor(0xFFFF);
+  tft.setCursor(55, 16);
+  tft.print("TOP");
+  tft.setCursor(46, 104);
+  tft.print("BOTTOM");
+  shownBackground = 0xFFFF; // The next status must repaint the whole screen.
+}
+
+void renderCurrentScreen() {
+  if (blePinOnScreen && blePairingPin) {
+    char code[7];
+    snprintf(code, sizeof(code), "%06lu", static_cast<unsigned long>(blePairingPin));
+    tftShow("BLE PAIR", code);
+  } else if (framePreviewActive) {
+    drawFramePreview();
+  } else {
+    tftShow(statusText, statusDetail);
+  }
+}
+
+void stopFramePreview() {
+  if (!framePreviewActive) return;
+  framePreviewActive = false;
+  shownBackground = 0xFFFF;
+  renderCurrentScreen();
+}
+
 uint32_t packedTftGeometry(uint8_t column, uint8_t row,
                            ILI9163Display::Orientation orientation) {
   return (static_cast<uint32_t>(orientation) << 16) |
@@ -322,13 +362,8 @@ void applyTftGeometry(uint8_t column, uint8_t row,
   tftOrientation = orientation;
   tft.fillScreen(0x0000);
   shownBackground = 0xFFFF; // Force top and bottom bands to be redrawn too.
-  if (blePinOnScreen && blePairingPin) {
-    char code[7];
-    snprintf(code, sizeof(code), "%06lu", static_cast<unsigned long>(blePairingPin));
-    tftShow("BLE PAIR", code);
-  } else {
-    tftShow(statusText, statusDetail);
-  }
+  if (framePreviewActive) framePreviewStarted = millis();
+  renderCurrentScreen();
 }
 
 bool saveTftGeometry(uint8_t column, uint8_t row,
@@ -343,12 +378,21 @@ void showStatus(const String &top, const String &bottom = "") {
   statusText = top;
   statusDetail = bottom;
   statusShownAt = millis();
-  tftShow(top, bottom);
+  if (framePreviewActive) {
+    framePreviewActive = false;
+    shownBackground = 0xFFFF;
+  }
+  renderCurrentScreen();
   Serial.print("[status] ");
   Serial.print(top);
   if (bottom.length()) { Serial.print(" "); Serial.print(bottom); }
   Serial.println();
   bleNotifyLine(String("[status] ") + top + (bottom.length() ? String(" ") + bottom : String("")));
+}
+
+bool recentStatusFeedback() {
+  return statusText != "READY" && statusText != "PENDING" && statusText != "OFFLINE" &&
+         millis() - statusShownAt < 3000;
 }
 
 void setupTft() {
@@ -492,6 +536,7 @@ ApiReply signedRequest(const String &method, const String &path, const String &b
   http.addHeader("X-Device-Timestamp", timestamp);
   http.addHeader("X-Device-Nonce", nonce);
   http.addHeader("X-Device-Signature", signature);
+  uint32_t requestStarted = millis();
   reply.code = method == "GET" ? http.GET() : http.POST(body);
   if (reply.code > 0) {
     reply.body = http.getString();
@@ -499,6 +544,11 @@ ApiReply signedRequest(const String &method, const String &path, const String &b
     reply.verified = constantTimeEqual(http.header("X-Device-Response-Signature"), expected);
   }
   http.end();
+  if (path == "/api/v1/punch") {
+    Serial.printf("[timing] punch HTTP %lu ms, code %d, verified %d\n",
+                  static_cast<unsigned long>(millis() - requestStarted),
+                  reply.code, reply.verified);
+  }
   return reply;
 }
 
@@ -554,16 +604,14 @@ bool pollDevice() {
   settings.putBool("approved", approved);
   settings.putBool("paused", paused);
   if (state == "pending") {
-    if (statusText != "PENDING") showStatus("PENDING", currentClock());
+    if (statusText != "PENDING" && !calibrationPending)
+      showStatus("PENDING", currentClock());
   } else if (!approved || paused) {
     if (statusText != "DENIED" || statusDetail != state) showStatus("DENIED", state);
   } else if (enrollmentCredential.isEmpty()) {
-    bool recentFeedback = (statusText == "OK" || statusText == "SAVED" || statusText == "OFFLINE SAVED" ||
-                           statusText == "CARD ADDED" || statusText == "CARD EXISTS" ||
-                           statusText == "ADD FAILED" || statusText == "ADD UNKNOWN" ||
-                           statusText == "ADD TIMEOUT") &&
-                          millis() - statusShownAt < 3000;
-    if (statusText != "READY" && !recentFeedback) showStatus("READY", currentClock());
+    if (statusText != "READY" && !recentStatusFeedback() && !calibrationPending &&
+        !framePreviewActive && uidOrder && filesystemReady)
+      showStatus("READY", currentClock());
   }
 
   if (approved && doc["commands"].is<JsonArray>()) {
@@ -633,7 +681,7 @@ void setupQueue() {
   }
 }
 
-bool queuePunch(const String &uid, const String &timestamp) {
+bool queuePunch(const String &uid, const String &timestamp, uint32_t &savedId) {
   if (!filesystemReady || countQueue() >= QUEUE_LIMIT || nextQueueId == 0) return false;
   uint32_t id = nextQueueId++;
   String temp = queuePath(id, "tmp"), event = queuePath(id, "evt");
@@ -651,6 +699,7 @@ bool queuePunch(const String &uid, const String &timestamp) {
     LittleFS.remove(temp);
     return false;
   }
+  savedId = id;
   return true;
 }
 
@@ -671,9 +720,18 @@ uint32_t oldestPending() {
   return oldest;
 }
 
-void retryOne() {
-  if (!filesystemReady || !approved || paused || authBlocked || !timeReady() || WiFi.status() != WL_CONNECTED) return;
-  uint32_t id = oldestPending();
+bool backgroundRetryDeferred() {
+  return calibrationPending || !enrollmentCredential.isEmpty() || framePreviewActive ||
+         recentStatusFeedback();
+}
+
+void retryOne(uint32_t selectedId = 0) {
+  if (!filesystemReady || !cryptoReady || !approved || paused || authBlocked ||
+      !timeReady() || WiFi.status() != WL_CONNECTED) return;
+  // A queued punch is background work. Keep card feedback, calibration, and
+  // an operator-requested alignment frame visible while they are in progress.
+  if (!selectedId && backgroundRetryDeferred()) return;
+  uint32_t id = selectedId ? selectedId : oldestPending();
   if (!id) return;
   String path = queuePath(id, "evt");
   File file = LittleFS.open(path, FILE_READ);
@@ -784,19 +842,23 @@ void scanCard() {
   if (!timeReady()) { showStatus("TIME UNSYNC"); return; }
   if (!filesystemReady) { showStatus("STORAGE ERROR"); return; }
   String timestamp = localTimestamp();
-  if (timestamp.length() != 19 || !queuePunch(uidOrder == 1 ? forward : reverse, timestamp)) {
+  uint32_t savedId = 0;
+  if (timestamp.length() != 19 ||
+      !queuePunch(uidOrder == 1 ? forward : reverse, timestamp, savedId)) {
     showStatus("QUEUE FULL/ERR");
     return;
   }
   if (WiFi.status() != WL_CONNECTED) showStatus("OFFLINE SAVED", currentClock());
-  else showStatus("SAVED", currentClock());
-  lastRetry = millis() - RETRY_MS;
+  else {
+    showStatus("SAVED", currentClock());
+    foregroundPunchId = savedId;
+  }
 }
 
 void printHelp(Print &out) {
   out.println("Commands: help | status | wifi <ssid> <password> | server <http://host:port> | name <text>");
   out.println("          calibrate <legacy UID> | init-storage NEW | queue | bad | discard-bad <id> | poll | selftest");
-  out.println("          display | m <0..3> | o <column 0..128> <row 0..128>");
+  out.println("          display | m <0..3> | o <column 0..128> <row 0..128> | frame | frame off");
   out.println("Commands work over USB or paired BLE. Input is not masked by terminal apps.");
 }
 
@@ -829,6 +891,18 @@ void processCommand(String line, Print &out) {
                static_cast<unsigned>(tftOrientation),
                static_cast<unsigned>(tftColumnOffset),
                static_cast<unsigned>(tftRowOffset));
+  } else if (line == "frame") {
+    if (blePinOnScreen && blePairingPin) {
+      out.println("Finish BLE pairing before showing the frame.");
+    } else {
+      framePreviewActive = true;
+      framePreviewStarted = millis();
+      renderCurrentScreen();
+      out.println("Frame preview for 30 seconds; m/o redraw it, frame off restores status.");
+    }
+  } else if (line == "frame off") {
+    stopFramePreview();
+    out.println("Frame preview closed.");
   } else if (line == "m" || line.startsWith("m ")) {
     int mode;
     char extra;
@@ -940,16 +1014,19 @@ void readSerial() {
 
 void readBle() {
   if (blePairingPin && bleConnected && !blePairingFinished && !blePinOnScreen) {
-    char code[7];
-    snprintf(code, sizeof(code), "%06lu", static_cast<unsigned long>(blePairingPin));
-    tftShow("BLE PAIR", code);
+    framePreviewActive = false;
     blePinOnScreen = true;
+    shownBackground = 0xFFFF;
+    renderCurrentScreen();
   }
   if (blePairingFinished) {
     blePairingFinished = false;
     blePairingPin = 0;
-    if (blePinOnScreen) tftShow(statusText, statusDetail);
-    blePinOnScreen = false;
+    if (blePinOnScreen) {
+      blePinOnScreen = false;
+      shownBackground = 0xFFFF;
+      renderCurrentScreen();
+    }
   }
   if (!bleCommands) return;
   if (!bleConnected) { xQueueReset(bleCommands); return; }
@@ -1023,10 +1100,20 @@ void loop() {
   if (wifiConnected && clockReady && settingsReady && cryptoReady && !authBlocked &&
       validServerUrl(serverUrl) && millis() - lastPoll >= pollInterval) {
     lastPoll = millis();
+    uint32_t pollStarted = millis();
     pollInterval = pollDevice() ? STATE_POLL_MS : STATE_RETRY_MS;
+    Serial.printf("[timing] device poll %lu ms\n",
+                  static_cast<unsigned long>(millis() - pollStarted));
   }
   scanCard();
-  if (enrollmentCredential.isEmpty() && millis() - lastRetry >= RETRY_MS) {
+  if (foregroundPunchId) {
+    uint32_t id = foregroundPunchId;
+    foregroundPunchId = 0;
+    retryOne(id);
+    lastRetry = millis();
+  }
+  if (enrollmentCredential.isEmpty() && !backgroundRetryDeferred() &&
+      millis() - lastRetry >= RETRY_MS) {
     lastRetry = millis();
     retryOne();
   }
@@ -1041,7 +1128,12 @@ void loop() {
       uidOrder && timeReady()) {
     showStatus("READY", currentClock());
   }
-  if ((statusText == "READY" || statusText == "PENDING") && millis() - lastClockRefresh >= 1000) {
+  if (framePreviewActive && millis() - framePreviewStarted >= FRAME_PREVIEW_MS) {
+    stopFramePreview();
+  }
+  if (!blePinOnScreen && !framePreviewActive &&
+      (statusText == "READY" || statusText == "PENDING") &&
+      millis() - lastClockRefresh >= 1000) {
     lastClockRefresh = millis();
     tftShow(statusText, currentClock());
   }
