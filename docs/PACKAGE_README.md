@@ -12,12 +12,12 @@ Windows 桌面端一般啟動時不顯示測試模式。需要模擬讀卡時，
 
 - [啟停後端](operations/server.md)及確認管理網頁
 - [備份與還原資料庫](operations/backup.md)
-- [設定 Windows 桌面讀卡端](operations/desktop-reader.md)或 [ESP32 讀卡端](operations/esp32-reader.md)
+- [設定 Windows 桌面讀卡端](operations/desktop-reader.md)或 [ESP32 讀卡端](operations/esp32-reader.md)；ESP32 USB 操作另見[Serial 設定工具](operations/esp32-serial-tool.md)
 - [處理離線紀錄與打卡異常](operations/offline.md)
 - [安裝或更新後檢查](operations/verification.md)
 
 ## 程式位置
 
-現行 v0.2.1 Windows 版的後端入口是 `api_server/api_server_app.exe`，管理網頁已包含在 `api_server/_internal/dist/`；桌面端入口是 `reader_client/reader_client_app.exe`。兩者都需保留完整資料夾及其 `_internal/`。程式使用相對路徑存取資料庫與日誌，實際位置取決於啟動時的工作目錄，查找方法見[啟停後端](operations/server.md)。
+現行 v0.2.1 Windows 版的後端入口是 `api_server/api_server_app.exe`，管理網頁已包含在 `api_server/_internal/dist/`；桌面端入口是 `reader_client/reader_client_app.exe`。另可由原始碼使用 `esp32_serial_tool.spec` 建置 `esp32_serial_tool/esp32_serial_tool_app.exe`，供 ESP32 USB 設定。各程式都需保留完整資料夾及其 `_internal/`。後端與桌面讀卡端使用相對路徑存取資料庫與日誌，實際位置取決於啟動時的工作目錄，查找方法見[啟停後端](operations/server.md)。
 
 原始碼封包內的 `firmware/CVTA_Reader/` 是 ESP32 韌體；依[韌體建置指南](../firmware/BUILD.md)編譯及燒錄，並完成[現場測試](../firmware/TESTING.md)。

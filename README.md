@@ -35,5 +35,6 @@ npm run dev
 ## 專題指南
 
 - [讀卡端韌體](firmware/README.md)
+- [ESP32 USB Serial 設定工具](docs/operations/esp32-serial-tool.md)
 - [部署與裝置協定](docs/DEPLOYMENT_AND_PROTOCOL.md)
 - [前端](frontend/README.md)

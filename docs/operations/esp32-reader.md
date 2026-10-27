@@ -1,12 +1,14 @@
 # 設定 ESP32 獨立讀卡端
 
+若在 Windows 電腦上透過 USB 操作，可使用[ESP32 USB Serial 設定工具](esp32-serial-tool.md)選擇 COM 埠、校正 LCD、設定網路與檢查狀態；以下首次設定與驗收步驟仍須完成。
+
 此讀卡端由 NodeMCU-32S、RC522 與 1.44 吋 TFT 組成，可不依賴 Windows 電腦持續運行；仍需電源、Wi-Fi、NTP 時間同步及後端核准。更換板子、讀卡器或顯示模組後，要重新檢查接線及卡號校對。詳細腳位與模組限制見[韌體與接線指南](https://github.com/CVTA-Engineers/CVTA-Attendance-System/blob/master/firmware/GUIDE.md)。
 
 現場原 LCD 模組的實物 PCB 絲印 **V2**（廣華電子購入），更換後模組的實物 PCB 絲印 **V1.1**（[蝦皮賣場](https://shopee.tw/%E5%BD%A9%E8%89%B2%E6%B6%B2%E6%99%B6LCD-1.44%E5%AF%B8TFT%E9%A1%AF%E7%A4%BA%E6%A8%A1%E7%B5%84-SPI%E5%82%B3%E8%BC%B8-ST7735S%E9%A9%85%E5%8B%95-Arduino-%E6%A8%B9%E8%8E%93%E6%B4%BESTM-i.4491023.2170133786)購入）。兩版腳位標註及順序相同；V2 實測 `m 0`、`o 0 32`，V1.1 實測 `m 3`、`o 2 3`。賣場標題的控制器名稱未經實物驗證。
 
 ## 首次設定
 
-1. 依接線指南接好 RC522、TFT 與 3.3 V 電源；更換不同批次 LCD 時，先依[畫面校正步驟](https://github.com/CVTA-Engineers/CVTA-Attendance-System/blob/master/firmware/tests/TFT_LCD_TEST/DETAILS.md#更換模組後校正畫面位置)確認方向與水平／垂直偏移，再依[Build 指南](https://github.com/CVTA-Engineers/CVTA-Attendance-System/blob/master/firmware/BUILD.md)燒錄正式韌體。透過 USB 或已配對 BLE 輸入 `m <0..3>`、`o <column> <row>` 套用實測值，`display` 查目前設定；重啟後確認值仍在、狀態文字與時鐘完整。
+1. 依接線指南接好 RC522、TFT 與 3.3 V 電源；更換不同批次 LCD 時，先依[畫面校正步驟](https://github.com/CVTA-Engineers/CVTA-Attendance-System/blob/master/firmware/tests/TFT_LCD_TEST/DETAILS.md#更換模組後校正畫面位置)確認方向與水平／垂直偏移，再依[Build 指南](https://github.com/CVTA-Engineers/CVTA-Attendance-System/blob/master/firmware/BUILD.md)燒錄正式韌體。透過 USB 或已配對 BLE 輸入 `frame` 顯示 128 × 128 白框、四色角標與上下文字，接著用 `m <0..3>`、`o <column> <row>` 調整；每次調整外框會重畫。檢查四邊、四角完整且 `TOP` 位於上方後，以 `display` 查目前設定，輸入 `frame off` 返回狀態畫面；若未操作，30 秒後自動返回。刷卡結果或其他新狀態也會取代外框。重啟後確認設定值仍在、狀態文字與時鐘完整。
 2. 以 **115200 baud** 開啟序列監控器，行尾選 **Newline**，輸入 `selftest`。應看到 `Protocol self-test PASS`。也可按韌體指南使用 BLE 終端完成設定。
 3. 輸入 `wifi <SSID> <密碼>`、`server http://192.168.100.23:16688`、`name <設備名稱>`，再輸入 `status`。確認 Wi-Fi 與 NTP 時間同步成功；`server` 不加 API 路徑。序列埠輸入不會遮蔽 Wi-Fi 密碼，僅在可信任電腦操作。
 4. 記下 `status` 顯示的 UUID。管理員在「系統管理 → 讀卡端管理」按「重新整理」，核對 UUID 並核准。輸入 `poll` 可立即查詢；連線正常時自動輪詢約每 5 秒一次，失敗時約 30 秒後重試。確認裝置已核准且未暫停。
@@ -16,6 +18,10 @@
 **完成標準：**`selftest` 通過、時間已同步、UUID 已核准、UID 校對成功且實卡紀錄可查。更換分割區或清除快閃記憶體前，先確認 `queue` 為零；清除會失去本機設定與身分，須重新核准。完整現場測試見[韌體驗收方法](https://github.com/CVTA-Engineers/CVTA-Attendance-System/blob/master/firmware/TESTING.md)。
 
 TFT 顏色代表流程進度：暖黃底 `SAVED` 只是本機暫存；較深的橘底表示離線、待審或結果未知等警告；紅底表示拒絕或錯誤；綠底 `OK` 才代表打卡請求獲伺服器確認。未登記卡可能先顯示暖黃底 `SAVED`，隨後轉為紅底 `PUNCH ERROR`，不可把暖黃底當成完成打卡。
+
+連線刷卡時 `SAVED` 後會立即送出當次事件；舊離線事件另行補送。若 `SAVED` 到 `OK` 或 `PUNCH ERROR` 明顯變慢，可在 115200 baud 序列監控器查看 `[timing] punch HTTP ... ms`；若刷卡到 `SAVED` 變慢，對照 `[timing] device poll ... ms`。前者反映打卡請求等待時間，後者反映裝置狀態輪詢在讀卡迴圈中占用的時間。
+
+BLE 配對時，TFT 的 `BLE PAIR` 六位碼會保持在畫面上，不會被 READY 時鐘或刷卡結果蓋掉；配對完成或斷線後才顯示最新狀態。定位外框的優先級低於配對碼，新刷卡結果或狀態變更可結束外框。進行 UID 校對或新增空卡時，等待提示不會被一般輪詢或離線補送畫面覆蓋。
 
 ## 新增空卡
 

@@ -25,6 +25,7 @@
 | 管理介面 | `frontend/src/views/`、`frontend/src/api/index.ts`、`frontend/src/router/index.ts` |
 | Windows 讀卡端與離線補送 | `reader_client.py`、`reader/`、`worker/` |
 | ESP32 韌體 | `firmware/CVTA_Reader/`，另見[韌體指南](../../firmware/GUIDE.md)與[更換 LCD 校正](../../firmware/tests/TFT_LCD_TEST/DETAILS.md#更換模組後校正畫面位置) |
+| ESP32 USB Serial 設定工具 | `esp32_serial_tool.py`、`esp32_serial_protocol.py`；操作見[USB 工具教程](../operations/esp32-serial-tool.md) |
 
 桌面端只有以 `--dev-mode` 啟動才顯示「測試模式 → 模擬讀卡」。模擬讀卡只替代讀卡機輸入；後續仍走 `PunchClient._on_card_scanned`、裝置核准檢查、簽章請求與離線補送。操作方法見[設定桌面讀卡端](../operations/desktop-reader.md#測試模式與模擬讀卡)。
 

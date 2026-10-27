@@ -8,6 +8,7 @@
 | 人工備份或還原資料庫 | [備份與還原](backup.md) |
 | 安裝或重新核准 Windows 讀卡端 | [設定桌面讀卡端](desktop-reader.md) |
 | 接線、更換或設定 ESP32 讀卡端 | [設定 ESP32 讀卡端](esp32-reader.md) |
+| 用 Windows USB 工具校正 ESP32 LCD 或送出 Serial 指令 | [ESP32 USB Serial 設定工具](esp32-serial-tool.md) |
 | 斷線後補送、查拒絕或異常打卡 | [離線紀錄與排障](offline.md) |
 | 安裝或更新後確認系統 | [系統檢查](verification.md) |
 
