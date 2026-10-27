@@ -1,6 +1,7 @@
 import sys
 import os
 import logging
+import re
 from reader.diagnostics import setup_client_diagnostics
 
 from datetime import datetime
@@ -8,7 +9,7 @@ from PySide6.QtWidgets import QApplication, QMainWindow, QSystemTrayIcon, QMenu,
 from PySide6.QtGui import QIcon, QAction
 from PySide6.QtCore import QTimer, Qt, QProcess, Slot
 
-from reader.global_card_reader import GlobalCardReader  # 前文定義的全域監聽類別
+from reader.global_card_reader import GlobalCardReader, reverse_uid_bytes
 from worker.worker_manager import WorkerManager
 from worker.punch_worker import PunchWorker, RetryWorker, AddCardWorker
 from worker.offline_manager import OfflineManager
@@ -44,6 +45,10 @@ class PunchClient(QMainWindow):
         self.enrollment_timer = QTimer(self)
         self.enrollment_timer.setSingleShot(True)
         self.enrollment_timer.timeout.connect(self._enrollment_timed_out)
+        self.calibration_expected = ""
+        self.calibration_timer = QTimer(self)
+        self.calibration_timer.setSingleShot(True)
+        self.calibration_timer.timeout.connect(self._calibration_timed_out)
         self.identity = DeviceIdentity()
         self.device_status = "pending"
         self.remote_paused = False
@@ -61,10 +66,13 @@ class PunchClient(QMainWindow):
         self.offline_mgr = OfflineManager()
         self.retry_pending = bool(self.offline_mgr.load_all())
         self.reader = GlobalCardReader(threshold_ms=50)
+        self.reader.uid_order = self.identity.uid_order
 
         # 2. 綁定硬體信號 (強制 QueuedConnection 以解決執行緒衝突問題)
         self.reader.card_scanned.connect(
             self._on_card_scanned, Qt.QueuedConnection)
+        self.reader.calibration_scanned.connect(
+            self._on_calibration_scanned, Qt.QueuedConnection)
 
         # 3. 初始化 UI & 托盤
         self.init_tray()
@@ -165,6 +173,9 @@ class PunchClient(QMainWindow):
         server_act = QAction("設定伺服器位址", self)
         server_act.triggered.connect(self._set_server_url)
         menu.addAction(server_act)
+        calibrate_act = QAction("校正卡號順序", self)
+        calibrate_act.triggered.connect(self._start_calibration)
+        menu.addAction(calibrate_act)
         if self.dev_mode:
             test_menu = QMenu("測試模式", menu)
             menu.addMenu(test_menu)
@@ -199,11 +210,14 @@ class PunchClient(QMainWindow):
     def _simulate_card_scan(self):
         if not self.dev_mode or self._shutdown_requested:
             return
+        calibrating = bool(self.calibration_expected)
         # The global keyboard listener must not mistake typing in this dialog for a card scan.
         self.reader.stop()
         try:
             uid, ok = QInputDialog.getText(
-                self, "模擬讀卡", "輸入卡號（讀卡程式處理後的 UID）："
+                self, "模擬讀卡",
+                ("輸入模擬讀卡機的原始 UID（尚未調整位元組順序）：" if calibrating
+                 else "輸入卡號（讀卡程式處理後的 UID）：")
             )
         finally:
             if not self._shutdown_requested:
@@ -214,7 +228,63 @@ class PunchClient(QMainWindow):
         if not uid:
             QMessageBox.warning(self, "卡號錯誤", "請輸入卡號")
             return
+        if calibrating:
+            # A modal dialog can outlive the 60-second calibration timer.
+            if self.calibration_expected:
+                self._on_calibration_scanned(uid)
+            return
         self._on_card_scanned(uid)
+
+    def _start_calibration(self):
+        if self._shutdown_requested:
+            return
+        self.reader.stop()
+        try:
+            expected, ok = QInputDialog.getText(
+                self, "校正卡號順序", "輸入同一張實卡的既有 UID（8、14 或 20 位十六進位）："
+            )
+        finally:
+            if not self._shutdown_requested:
+                self.reader.start()
+        if self._shutdown_requested or not ok:
+            return
+        expected = expected.strip().upper()
+        if len(expected) not in (8, 14, 20) or not re.fullmatch(r"[0-9A-F]+", expected):
+            QMessageBox.warning(self, "卡號錯誤", "UID 須為 8、14 或 20 位十六進位字元")
+            return
+        self._clear_enrollment()
+        self.identity.set_uid_order(None)
+        self.reader.uid_order = None
+        self.calibration_expected = expected
+        self.reader.calibration_pending = True
+        self.calibration_timer.start(60000)
+        self.tray.showMessage("校正卡號順序", "請在 60 秒內刷剛才輸入的實卡；此刷卡不會打卡", QSystemTrayIcon.Information)
+
+    def _on_calibration_scanned(self, raw_uid):
+        if not self.calibration_expected or self._shutdown_requested:
+            return
+        self.calibration_timer.stop()
+        self.reader.calibration_pending = False
+        expected = self.calibration_expected
+        self.calibration_expected = ""
+        raw = raw_uid.upper()
+        reversed_uid = reverse_uid_bytes(raw)
+        if raw == expected:
+            order = "normal"
+        elif reversed_uid == expected:
+            order = "reversed"
+        else:
+            self.tray.showMessage("UID MISMATCH", f"原始 UID：{raw}；倒序 UID：{reversed_uid}。請核對卡片後重新校正", QSystemTrayIcon.Warning)
+            return
+        self.identity.set_uid_order(order)
+        self.reader.uid_order = order
+        self.tray.showMessage("UID MATCH", f"已保存卡號順序：{'原始' if order == 'normal' else '倒序'}；UID：{expected}", QSystemTrayIcon.Information)
+
+    def _calibration_timed_out(self):
+        if self.calibration_expected:
+            self.calibration_expected = ""
+            self.reader.calibration_pending = False
+            self.tray.showMessage("校正逾時", "60 秒內未刷卡，請重新校正卡號順序", QSystemTrayIcon.Warning)
 
     # ── Worker Signal Setup ──────────────────────────────────
 
@@ -285,7 +355,7 @@ class PunchClient(QMainWindow):
             self.tray.showMessage("新增卡片逾時", "30 秒內未刷卡，已返回打卡模式", QSystemTrayIcon.Warning)
 
     def _on_card_scanned(self, uid: str):
-        if self._shutdown_requested:
+        if self._shutdown_requested or self.reader.uid_order is None:
             return
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -318,6 +388,9 @@ class PunchClient(QMainWindow):
 
     def _begin_shutdown(self, restart: bool):
         self._clear_enrollment()
+        self.calibration_timer.stop()
+        self.calibration_expected = ""
+        self.reader.calibration_pending = False
         if self._shutdown_requested:
             return
         self._shutdown_requested = True

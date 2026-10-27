@@ -19,6 +19,7 @@ from PySide6.QtCore import QObject, Signal
 import reader_client
 from reader.diagnostics import client_log_dir
 from reader.global_card_reader import GlobalCardReader
+from reader.identity import DeviceIdentity
 from worker.worker_base import BaseWorker
 from worker.worker_manager import WorkerManager
 from worker.punch_worker import PunchWorker, RetryWorker, AddCardWorker
@@ -64,6 +65,10 @@ class FakeIdentity:
     secret = "0" * 64
     server_url = "http://127.0.0.1:16688"
     registered = True
+    uid_order = "reversed"
+
+    def set_uid_order(self, order):
+        self.uid_order = order
 
 
 class FakeOfflineManager:
@@ -79,11 +84,13 @@ class FakeOfflineManager:
 
 class FakeReader(QObject):
     card_scanned = Signal(str)
+    calibration_scanned = Signal(str)
 
     def __init__(self, threshold_ms=50):
         super().__init__()
         self.starts = 0
         self.stops = 0
+        self.calibration_pending = False
 
     def start(self):
         self.starts += 1
@@ -106,11 +113,109 @@ class MenuTestClient(reader_client.PunchClient):
 
 
 class ReaderRuntimeTests(unittest.TestCase):
+    def test_calibration_is_available_without_dev_mode_and_consumes_scan(self):
+        with (patch.object(reader_client, "DeviceIdentity", return_value=FakeIdentity()),
+              patch.object(reader_client, "OfflineManager", return_value=FakeOfflineManager()),
+              patch.object(reader_client, "GlobalCardReader", FakeReader)):
+            client = MenuTestClient()
+            try:
+                messages = []
+                client.tray.showMessage = lambda *args: messages.append(args)
+                action = next(action for action in client.tray.contextMenu().actions()
+                              if action.text() == "校正卡號順序")
+                with patch.object(reader_client.QInputDialog, "getText", return_value=("A1B2C3D4", True)), \
+                     patch.object(client, "_on_card_scanned") as punch:
+                    action.trigger()
+                    self.assertTrue(client.reader.calibration_pending)
+                    self.assertIsNone(client.reader.uid_order)
+                    client.reader.calibration_scanned.emit("D4C3B2A1")
+                    APP.processEvents()
+                    punch.assert_not_called()
+                self.assertEqual(client.reader.uid_order, "reversed")
+                self.assertEqual(client.identity.uid_order, "reversed")
+                self.assertFalse(client.calibration_timer.isActive())
+                self.assertTrue(any(message[0] == "UID MATCH" for message in messages))
+
+                with patch.object(reader_client.QInputDialog, "getText", return_value=("A1B2C3D4", True)):
+                    action.trigger()
+                client.reader.calibration_scanned.emit("A1B2C3D4")
+                APP.processEvents()
+                self.assertEqual(client.reader.uid_order, "normal")
+
+                with patch.object(reader_client.QInputDialog, "getText", return_value=("A1B2C3D4", True)):
+                    action.trigger()
+                client.reader.calibration_scanned.emit("11223344")
+                APP.processEvents()
+                self.assertIsNone(client.reader.uid_order)
+                self.assertTrue(any(message[0] == "UID MISMATCH" for message in messages))
+                client._on_card_scanned("A1B2C3D4")
+                self.assertFalse(client.worker_manager.has_workers())
+                with patch.object(reader_client.QInputDialog, "getText", return_value=("A1B2C3D4", True)):
+                    action.trigger()
+                client._calibration_timed_out()
+                self.assertFalse(client.reader.calibration_pending)
+                self.assertIsNone(client.reader.uid_order)
+                self.assertTrue(any(message[0] == "校正逾時" for message in messages))
+            finally:
+                client.calibration_timer.stop()
+                client.reader.stop()
+
     def test_dev_mode_requires_startup_flag(self):
         self.assertEqual(reader_client.client_arguments(["reader_client.exe"]),
                          (False, ["reader_client.exe"]))
         self.assertEqual(reader_client.client_arguments(["reader_client.exe", "--dev-mode", "-platform", "offscreen"]),
                          (True, ["reader_client.exe", "-platform", "offscreen"]))
+
+    def test_simulated_scan_completes_calibration_without_punch(self):
+        with (patch.object(reader_client, "DeviceIdentity", return_value=FakeIdentity()),
+              patch.object(reader_client, "OfflineManager", return_value=FakeOfflineManager()),
+              patch.object(reader_client, "GlobalCardReader", FakeReader)):
+            client = MenuTestClient(dev_mode=True)
+            try:
+                menu = client.tray.contextMenu()
+                calibrate = next(action for action in menu.actions()
+                                 if action.text() == "校正卡號順序")
+                test_menu = next(action.menu() for action in menu.actions()
+                                 if action.text() == "測試模式")
+                simulate = test_menu.actions()[0]
+                with patch.object(reader_client.QInputDialog, "getText", return_value=("A1B2C3D4", True)):
+                    calibrate.trigger()
+                with patch.object(reader_client.QInputDialog, "getText", return_value=("D4C3B2A1", True)) as dialog, \
+                     patch.object(client, "_on_card_scanned") as punch:
+                    simulate.trigger()
+                    self.assertIn("原始 UID", dialog.call_args.args[2])
+                    punch.assert_not_called()
+                self.assertEqual(client.identity.uid_order, "reversed")
+                self.assertFalse(client.calibration_expected)
+                self.assertFalse(client.worker_manager.has_workers())
+
+                with patch.object(reader_client.QInputDialog, "getText", return_value=("A1B2C3D4", True)):
+                    calibrate.trigger()
+                with patch.object(reader_client.QInputDialog, "getText", return_value=("", False)), \
+                     patch.object(client, "_on_card_scanned") as punch:
+                    simulate.trigger()
+                    punch.assert_not_called()
+                self.assertTrue(client.calibration_expected)
+
+                def expire_during_dialog(*_args):
+                    client._calibration_timed_out()
+                    return "A1B2C3D4", True
+                with patch.object(reader_client.QInputDialog, "getText", side_effect=expire_during_dialog), \
+                     patch.object(client, "_on_card_scanned") as punch:
+                    simulate.trigger()
+                    punch.assert_not_called()
+                self.assertIsNone(client.reader.uid_order)
+
+                with patch.object(reader_client.QInputDialog, "getText", return_value=("A1B2C3D4", True)):
+                    calibrate.trigger()
+                with patch.object(reader_client.QInputDialog, "getText", return_value=("A1B2C3D4", True)), \
+                     patch.object(client, "_on_card_scanned") as punch:
+                    simulate.trigger()
+                    punch.assert_not_called()
+                self.assertEqual(client.identity.uid_order, "normal")
+            finally:
+                client.calibration_timer.stop()
+                client.reader.stop()
 
     def test_simulated_scan_uses_card_scan_path(self):
         with (patch.object(reader_client, "DeviceIdentity", return_value=FakeIdentity()),
@@ -401,6 +506,38 @@ class ReaderRuntimeTests(unittest.TestCase):
             self.assertEqual(reader.key_buffer, [])
         finally:
             reader.stop()
+
+    def test_reader_calibration_scan_bypasses_punch_and_changes_order(self):
+        reader = GlobalCardReader()
+        reader._stopped = False
+        scanned, calibration = [], []
+        reader.card_scanned.connect(scanned.append)
+        reader.calibration_scanned.connect(calibration.append)
+        try:
+            reader.calibration_pending = True
+            reader.uid_order = None
+            for char in "D4C3B2A1":
+                reader._record_key(char, False)
+            reader._on_input_finished()
+            self.assertEqual(calibration, ["D4C3B2A1"])
+            self.assertEqual(scanned, [])
+            reader.uid_order = "normal"
+            for char in "a1b2c3d4":
+                reader._record_key(char, False)
+            reader._on_input_finished()
+            self.assertEqual(scanned, ["A1B2C3D4"])
+        finally:
+            reader.stop()
+
+    def test_uid_order_persists_in_temporary_identity(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "device.json"
+            identity = DeviceIdentity(path)
+            self.assertEqual(identity.uid_order, "reversed")
+            identity.set_uid_order(None)
+            self.assertIsNone(DeviceIdentity(path).uid_order)
+            identity.set_uid_order("normal")
+            self.assertEqual(DeviceIdentity(path).uid_order, "normal")
 
     def test_log_path_does_not_depend_on_working_directory(self):
         with tempfile.TemporaryDirectory() as root:

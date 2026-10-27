@@ -8,6 +8,8 @@ CVTA 系統由 Windows 後端與管理網頁、Windows 桌面讀卡端及 ESP32 
 
 Windows 桌面端一般啟動時不顯示測試模式。需要模擬讀卡時，以 `reader_client_app.exe --dev-mode` 啟動，才可在托盤選單選「測試模式 → 模擬讀卡」輸入卡號。這會使用現有裝置身分送出正式打卡或加卡請求，斷線時打卡可能留待補送；操作前先告知管理員。輸入方式與結果核對見[桌面讀卡端測試模式](operations/desktop-reader.md#測試模式與模擬讀卡)。
 
+Windows 桌面端的「校正卡號順序」可直接從一般模式托盤選單使用。輸入同一張實卡既有 UID，60 秒內刷卡，看到 `UID MATCH` 才正式打卡；開發模式也可在等待期間用「模擬讀卡」輸入原始 UID 完成校正。校正失敗或逾時時須重新校正。步驟見[桌面讀卡端校正](operations/desktop-reader.md#校正卡號順序)。
+
 從[維運操作導覽](operations/README.md)選擇目前要做的事：
 
 - [啟停後端](operations/server.md)及確認管理網頁

@@ -5,9 +5,15 @@ from pynput import keyboard
 logger = logging.getLogger(__name__)
 
 
+def reverse_uid_bytes(uid_str: str) -> str:
+    """Keep the legacy keyboard reader's two-character byte reversal."""
+    return "".join(uid_str[i - 1:i + 1] for i in range(len(uid_str) - 1, 0, -2))
+
+
 class GlobalCardReader(QObject):
     # 當識別出一串完整的卡號時發送
     card_scanned = Signal(str)
+    calibration_scanned = Signal(str)
     # pynput 僅傳遞按鍵；緩衝與計時器只在 GUI 執行緒操作。
     _key_pressed = Signal(str, bool)
 
@@ -15,6 +21,8 @@ class GlobalCardReader(QObject):
         super().__init__()
         self.threshold_ms = threshold_ms
         self.key_buffer = []
+        self.uid_order = "reversed"
+        self.calibration_pending = False
 
         # 1. 初始化計時器 (此物件屬於建立它的執行緒，通常是主 GUI 執行緒)
         self.timer = QTimer(self)
@@ -80,10 +88,14 @@ class GlobalCardReader(QObject):
         # 1. 判定是否為「高速輸入」
         # 這裡可以加入更嚴格的檢查，例如檢查總長度是否 > 4，防止誤觸
         if len(raw_uid) >= 4:
-            # 移植你原本的每兩位反轉邏輯
-            final_uid = self._convert_uid(raw_uid)
-            logger.info(f"[Reader] 識別到全域輸入卡號: {final_uid}")
-            self.card_scanned.emit(final_uid)
+            if self.calibration_pending:
+                self.calibration_pending = False
+                self.calibration_scanned.emit(raw_uid)
+            elif self.uid_order is not None:
+                final_uid = (self._convert_uid(raw_uid) if self.uid_order == "reversed"
+                             else raw_uid).upper()
+                logger.info(f"[Reader] 識別到全域輸入卡號: {final_uid}")
+                self.card_scanned.emit(final_uid)
         else:
             logger.debug(f"[Reader] 輸入長度不足，忽略: {raw_uid}")
 
@@ -92,7 +104,4 @@ class GlobalCardReader(QObject):
 
     def _convert_uid(self, uid_str: str) -> str:
         """保持舊專案的相容性邏輯"""
-        _uid = []
-        for i in range(len(uid_str) - 1, 0, -2):
-            _uid.extend(uid_str[i - 1:i + 1])
-        return "".join(_uid)
+        return reverse_uid_bytes(uid_str)

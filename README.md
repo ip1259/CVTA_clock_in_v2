@@ -2,6 +2,8 @@
 
 提供 FastAPI 打卡後端、Vue 管理前端、Windows 桌面讀卡端與 ESP32 RFID 讀卡端。
 
+Windows 桌面讀卡端可從托盤校正 UID 順序；開發模式的模擬讀卡也可完成校正。操作見[桌面讀卡端指南](docs/operations/desktop-reader.md#校正卡號順序)。
+
 ## 建立開發環境
 
 準備 Python 3.13、[uv](https://docs.astral.sh/uv/)、Node.js（20.19 以上的 20.x，或 22.12 以上）與 npm。Python 套件依 `pyproject.toml`、`uv.lock` 安裝；前端套件依 `frontend/package.json`、`frontend/package-lock.json` 安裝。修改 ESP32 韌體時另需 Arduino IDE 2，板卡及函式庫見[韌體建置指南](firmware/BUILD.md)。

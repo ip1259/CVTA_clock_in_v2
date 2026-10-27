@@ -29,4 +29,6 @@
 
 桌面端只有以 `--dev-mode` 啟動才顯示「測試模式 → 模擬讀卡」。模擬讀卡只替代讀卡機輸入；後續仍走 `PunchClient._on_card_scanned`、裝置核准檢查、簽章請求與離線補送。操作方法見[設定桌面讀卡端](../operations/desktop-reader.md#測試模式與模擬讀卡)。
 
+桌面端托盤「校正卡號順序」在一般模式可用。`GlobalCardReader` 在校正時只回傳原始 UID；開發模式的模擬讀卡在校正等待期間也會把輸入當作原始 UID。`PunchClient` 比對原始與位元組倒序，成功後將順序保存於本機裝置設定；校正中的掃描不進入 `/api/v1/punch`、加卡或離線佇列。失敗或逾時後順序保持未設定，直到再次校正成功。操作見[校正卡號順序](../operations/desktop-reader.md#校正卡號順序)。
+
 熱庫 schema 目前為第 3 版；未知結構會阻止後端啟動。年度歸檔函式存在，但目前未見自動呼叫。更動資料結構時，連同[備份與還原](../operations/backup.md)一起檢查。遠端新增卡片使用裝置命令與一次性憑證，詳見[裝置協定](../DEPLOYMENT_AND_PROTOCOL.md#遠端新增空卡)。

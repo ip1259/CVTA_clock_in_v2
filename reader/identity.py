@@ -30,10 +30,14 @@ class DeviceIdentity:
         self.server_url = data["server_url"].rstrip("/")
         self.name = data["name"]
         self.registered = bool(data.get("registered", False))
+        self.uid_order = data.get("uid_order", "reversed")
+        if self.uid_order not in (None, "normal", "reversed"):
+            self.uid_order = None
 
     def _save(self):
         data = {"uuid": self.uuid, "secret": self.secret, "server_url": self.server_url,
-                "name": self.name, "registered": self.registered}
+                "name": self.name, "registered": self.registered,
+                "uid_order": self.uid_order}
         self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def mark_registered(self):
@@ -43,4 +47,10 @@ class DeviceIdentity:
     def set_server_url(self, url):
         self.server_url = url.rstrip("/")
         self.registered = False
+        self._save()
+
+    def set_uid_order(self, order):
+        if order not in (None, "normal", "reversed"):
+            raise ValueError("Invalid UID order")
+        self.uid_order = order
         self._save()
