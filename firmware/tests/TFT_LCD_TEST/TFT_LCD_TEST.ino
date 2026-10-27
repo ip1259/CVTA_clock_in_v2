@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <SPI.h>
+#include <stdio.h>
 #include "ILI9163Display.h"
 #include "ReaderStatusDisplay.h"
 
@@ -8,10 +9,16 @@ constexpr uint8_t RFID_SS_PIN = 25;
 constexpr uint8_t TFT_CS_PIN = 26;
 constexpr uint8_t TFT_DC_PIN = 21;
 constexpr uint8_t TFT_RST_PIN = 22;
+constexpr uint8_t DEFAULT_COLUMN_OFFSET = 0;
+constexpr uint8_t DEFAULT_ROW_OFFSET = 32;
 
-ILI9163Display tft(TFT_CS_PIN, TFT_DC_PIN, TFT_RST_PIN, RFID_SS_PIN);
+ILI9163Display tft(TFT_CS_PIN, TFT_DC_PIN, TFT_RST_PIN, RFID_SS_PIN,
+                   DEFAULT_COLUMN_OFFSET, DEFAULT_ROW_OFFSET);
 GFXcanvas16 clockCanvas(128, 76);
 uint16_t shownBackground = 0x0000;
+uint8_t columnOffset = DEFAULT_COLUMN_OFFSET;
+uint8_t rowOffset = DEFAULT_ROW_OFFSET;
+uint8_t orientationMode = 0;
 bool clockMode = false;
 uint32_t lastClockUpdate = 0;
 uint32_t clockSeconds = 0;
@@ -27,9 +34,14 @@ constexpr DemoStatus demos[] = {
     {"SAVED", "12:34:56"},
     {"OK", "12:34:56"},
     {"OFFLINE SAVED", "12:34:56"},
+    {"CARD ADDED", "A1B2C3D4"},
+    {"CARD EXISTS", "A1B2C3D4"},
+    {"ADD UNKNOWN", "CHECK ADMIN"},
+    {"PUNCH ERROR", "404"},
     {"DENIED", "CHECK DEVICE"},
     {"STORAGE ERROR", ""},
     {"PENDING", "12:34:56"},
+    {"TIME UNSYNC", ""},
 };
 
 void showNextStatus() {
@@ -66,6 +78,11 @@ void showPattern() {
   tft.fillScreen(0x0000);
   shownBackground = 0xFFFF;
   tft.drawRect(0, 0, 128, 128, 0xFFFF);
+  // Four distinct corners make clipping and direction of displacement visible.
+  tft.fillRect(1, 1, 7, 7, 0xF800);
+  tft.fillRect(120, 1, 7, 7, 0x07E0);
+  tft.fillRect(1, 120, 7, 7, 0x001F);
+  tft.fillRect(120, 120, 7, 7, 0xFFE0);
   tft.setTextWrap(false);
   tft.setTextSize(2);
   tft.setTextColor(0xFFFF);
@@ -81,6 +98,44 @@ void showPattern() {
   Serial.println("Showing test pattern");
 }
 
+void setTestOffsets() {
+  String input = Serial.readStringUntil('\n');
+  int column, row;
+  char extra;
+  if (sscanf(input.c_str(), " %d %d %c", &column, &row, &extra) != 2 ||
+      column < 0 || column > 128 || row < 0 || row > 128) {
+    Serial.println("Use: o <column 0..128> <row 0..128> (example: o 0 0)");
+    return;
+  }
+  clockMode = false;
+  tft.fillScreen(0x0000);
+  columnOffset = static_cast<uint8_t>(column);
+  rowOffset = static_cast<uint8_t>(row);
+  tft.setOffsets(columnOffset, rowOffset);
+  Serial.printf("Testing column offset %u, row offset %u\n",
+                static_cast<unsigned>(columnOffset), static_cast<unsigned>(rowOffset));
+  showPattern();
+}
+
+void setTestOrientation() {
+  String input = Serial.readStringUntil('\n');
+  int mode;
+  char extra;
+  if (sscanf(input.c_str(), " %d %c", &mode, &extra) != 1 ||
+      mode < 0 || mode > 3) {
+    Serial.println("Use: m <0..3> (0=normal, 1=horizontal flip, 2=vertical flip, 3=180 degrees)");
+    return;
+  }
+  clockMode = false;
+  tft.fillScreen(0x0000);
+  orientationMode = static_cast<uint8_t>(mode);
+  tft.setOrientation(static_cast<ILI9163Display::Orientation>(orientationMode));
+  Serial.printf("Testing orientation %u with offsets (%u, %u)\n",
+                static_cast<unsigned>(orientationMode),
+                static_cast<unsigned>(columnOffset), static_cast<unsigned>(rowOffset));
+  showPattern();
+}
+
 void showColor(uint16_t color, const char *name) {
   tft.fillScreen(color);
   shownBackground = 0xFFFF;
@@ -94,14 +149,17 @@ void setup() {
   digitalWrite(RFID_SS_PIN, HIGH);
   SPI.begin(18, -1, 23, TFT_CS_PIN);
   tft.begin();
-  Serial.println("TFT: ILI9163-compatible init, 20 MHz buffered SPI, visible rows 32..159");
-  Serial.println("Commands: s=next status/color demo, c=1 Hz clock, p=pattern, r/g/b/k/w=solid color");
+  Serial.printf("TFT: ILI9163-compatible init, 20 MHz buffered SPI, initial offsets (%u, %u)\n",
+                static_cast<unsigned>(columnOffset), static_cast<unsigned>(rowOffset));
+  Serial.println("Commands: m <0..3>=orientation, o <column> <row>=offsets, s=status, c=clock, p=pattern, r/g/b/k/w=color");
   showPattern();
 }
 
 void loop() {
   if (Serial.available()) {
     switch (Serial.read()) {
+      case 'm': setTestOrientation(); break;
+      case 'o': setTestOffsets(); break;
       case 'c':
         clockMode = true;
         clockSeconds = 0;

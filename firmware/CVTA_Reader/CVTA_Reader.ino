@@ -19,6 +19,7 @@
 #include <mbedtls/md.h>
 #include <time.h>
 #include <esp_arduino_version.h>
+#include <stdio.h>
 
 // NodeMCU-32S / generic ESP32. The RC522 IRQ pin is unused.
 constexpr uint8_t RFID_SCK = 18;
@@ -29,6 +30,14 @@ constexpr uint8_t RFID_RST = 27;
 constexpr uint8_t TFT_CS = 26;
 constexpr uint8_t TFT_DC = 21;
 constexpr uint8_t TFT_RST = 22;
+// New panel measured with TFT_LCD_TEST: m 3, o 2 3.
+// Original panel used Normal, column 0, row 32.
+constexpr uint8_t TFT_COLUMN_OFFSET = 2;
+constexpr uint8_t TFT_ROW_OFFSET = 3;
+constexpr ILI9163Display::Orientation TFT_ORIENTATION =
+    ILI9163Display::Orientation::Rotate180;
+static_assert(TFT_COLUMN_OFFSET <= 128 && TFT_ROW_OFFSET <= 128,
+              "TFT offsets must keep the 128x128 window inside 8-bit RAM addresses");
 constexpr size_t QUEUE_LIMIT = 256;
 constexpr uint32_t STATE_POLL_MS = 5000;
 constexpr uint32_t STATE_RETRY_MS = 30000;
@@ -37,7 +46,11 @@ constexpr int64_t MAX_TIME_AGE_US = 24LL * 60 * 60 * 1000000;
 
 Preferences settings;
 MFRC522 rfid(RFID_SS, RFID_RST);
-ILI9163Display tft(TFT_CS, TFT_DC, TFT_RST, RFID_SS);
+ILI9163Display tft(TFT_CS, TFT_DC, TFT_RST, RFID_SS,
+                   TFT_COLUMN_OFFSET, TFT_ROW_OFFSET, TFT_ORIENTATION);
+uint8_t tftColumnOffset = TFT_COLUMN_OFFSET;
+uint8_t tftRowOffset = TFT_ROW_OFFSET;
+ILI9163Display::Orientation tftOrientation = TFT_ORIENTATION;
 GFXcanvas16 statusCanvas(128, 76);
 uint16_t shownBackground = 0x0000;
 String wifiSsid, wifiPassword, serverUrl, deviceName, deviceUuid, deviceSecret;
@@ -292,6 +305,40 @@ void tftShow(const String &top, const String &bottom) {
   readerDrawStatus(tft, statusCanvas, top, bottom, shownBackground);
 }
 
+uint32_t packedTftGeometry(uint8_t column, uint8_t row,
+                           ILI9163Display::Orientation orientation) {
+  return (static_cast<uint32_t>(orientation) << 16) |
+         (static_cast<uint32_t>(row) << 8) | column;
+}
+
+void applyTftGeometry(uint8_t column, uint8_t row,
+                      ILI9163Display::Orientation orientation) {
+  // Clear both address mappings so a previous orientation leaves no pixels behind.
+  tft.fillScreen(0x0000);
+  tft.setOrientation(orientation);
+  tft.setOffsets(column, row);
+  tftColumnOffset = column;
+  tftRowOffset = row;
+  tftOrientation = orientation;
+  tft.fillScreen(0x0000);
+  shownBackground = 0xFFFF; // Force top and bottom bands to be redrawn too.
+  if (blePinOnScreen && blePairingPin) {
+    char code[7];
+    snprintf(code, sizeof(code), "%06lu", static_cast<unsigned long>(blePairingPin));
+    tftShow("BLE PAIR", code);
+  } else {
+    tftShow(statusText, statusDetail);
+  }
+}
+
+bool saveTftGeometry(uint8_t column, uint8_t row,
+                     ILI9163Display::Orientation orientation) {
+  if (!settingsReady || settings.putUInt("lcd-geo", packedTftGeometry(column, row, orientation)) != 4)
+    return false;
+  applyTftGeometry(column, row, orientation);
+  return true;
+}
+
 void showStatus(const String &top, const String &bottom = "") {
   statusText = top;
   statusDetail = bottom;
@@ -307,7 +354,10 @@ void showStatus(const String &top, const String &bottom = "") {
 void setupTft() {
   tft.begin();
   tft.fillScreen(0x0000);
-  Serial.println("ILI9163-compatible TFT initialized (20 MHz SPI, row offset 32)");
+  Serial.printf("ILI9163-compatible TFT initialized (20 MHz SPI, column offset %u, row offset %u, orientation %u)\n",
+                static_cast<unsigned>(TFT_COLUMN_OFFSET),
+                static_cast<unsigned>(TFT_ROW_OFFSET),
+                static_cast<unsigned>(TFT_ORIENTATION));
   if (!statusCanvas.getBuffer()) {
     Serial.println("TFT status buffer unavailable; drawing directly");
   }
@@ -363,6 +413,16 @@ void loadSettings() {
   deviceUuid = settings.getString("uuid", "");
   deviceSecret = settings.getString("secret", "");
   uidOrder = settings.getUChar("uid-order", 0);
+  uint32_t geometry = settings.getUInt(
+      "lcd-geo", packedTftGeometry(TFT_COLUMN_OFFSET, TFT_ROW_OFFSET, TFT_ORIENTATION));
+  uint8_t column = geometry & 0xFF;
+  uint8_t row = (geometry >> 8) & 0xFF;
+  if ((geometry & 0xFFFC0000UL) == 0 && column <= 128 && row <= 128) {
+    applyTftGeometry(column, row,
+                     static_cast<ILI9163Display::Orientation>((geometry >> 16) & 0x03));
+  } else {
+    Serial.println("Invalid saved TFT geometry; using firmware defaults");
+  }
   approved = settings.getBool("approved", false);
   paused = settings.getBool("paused", false);
   registered = settings.getBool("registered", false);
@@ -736,6 +796,7 @@ void scanCard() {
 void printHelp(Print &out) {
   out.println("Commands: help | status | wifi <ssid> <password> | server <http://host:port> | name <text>");
   out.println("          calibrate <legacy UID> | init-storage NEW | queue | bad | discard-bad <id> | poll | selftest");
+  out.println("          display | m <0..3> | o <column 0..128> <row 0..128>");
   out.println("Commands work over USB or paired BLE. Input is not masked by terminal apps.");
 }
 
@@ -763,6 +824,38 @@ void processCommand(String line, Print &out) {
                   deviceUuid.c_str(), WiFi.status() == WL_CONNECTED ? "online" : "offline",
                   serverUrl.c_str(), approved, paused, uidOrder, timeReady(),
                   filesystemReady ? "ready" : "error", unsigned(countQueue()));
+  } else if (line == "display") {
+    out.printf("Display: m %u, o %u %u (0=normal, 1=horizontal flip, 2=vertical flip, 3=180 degrees)\n",
+               static_cast<unsigned>(tftOrientation),
+               static_cast<unsigned>(tftColumnOffset),
+               static_cast<unsigned>(tftRowOffset));
+  } else if (line == "m" || line.startsWith("m ")) {
+    int mode;
+    char extra;
+    if (sscanf(line.c_str(), "m %d %c", &mode, &extra) != 1 || mode < 0 || mode > 3) {
+      out.println("Use: m <0..3> (0=normal, 1=horizontal flip, 2=vertical flip, 3=180 degrees)");
+      return;
+    }
+    if (!saveTftGeometry(tftColumnOffset, tftRowOffset,
+                         static_cast<ILI9163Display::Orientation>(mode))) {
+      out.println("Display settings not saved; screen unchanged.");
+      return;
+    }
+    out.println("Display orientation saved. Use display to check settings.");
+  } else if (line == "o" || line.startsWith("o ")) {
+    int column, row;
+    char extra;
+    if (sscanf(line.c_str(), "o %d %d %c", &column, &row, &extra) != 2 ||
+        column < 0 || column > 128 || row < 0 || row > 128) {
+      out.println("Use: o <column 0..128> <row 0..128>");
+      return;
+    }
+    if (!saveTftGeometry(static_cast<uint8_t>(column), static_cast<uint8_t>(row),
+                         tftOrientation)) {
+      out.println("Display settings not saved; screen unchanged.");
+      return;
+    }
+    out.println("Display offsets saved. Use display to check settings.");
   } else if (line.startsWith("wifi ")) {
     String args = line.substring(5);
     int separator = args.indexOf(' ');

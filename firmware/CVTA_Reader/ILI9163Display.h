@@ -5,13 +5,33 @@
 #include <Arduino.h>
 #include <SPI.h>
 
-// This module responds to the ILI9163C initialization sequence. Its 128x128
-// visible area maps to controller RAM rows 32..159 (measured with color bands).
+// The original module responds to the ILI9163C initialization sequence. Its
+// 128x128 visible area maps to controller RAM rows 32..159. Other batches may
+// expose a different RAM origin; pass their measured offsets to the constructor.
 // The TFT and RC522 share the ESP32 hardware SPI pins, with separate CS pins.
 class ILI9163Display : public Adafruit_GFX {
  public:
-  ILI9163Display(uint8_t cs, uint8_t dc, uint8_t rst, uint8_t otherCs)
-      : Adafruit_GFX(128, 128), cs_(cs), dc_(dc), rst_(rst), otherCs_(otherCs) {}
+  enum class Orientation : uint8_t {
+    Normal = 0, FlipHorizontal = 1, FlipVertical = 2, Rotate180 = 3
+  };
+
+  ILI9163Display(uint8_t cs, uint8_t dc, uint8_t rst, uint8_t otherCs,
+                 uint8_t columnOffset = 0, uint8_t rowOffset = 32,
+                 Orientation orientation = Orientation::Normal)
+      : Adafruit_GFX(128, 128), cs_(cs), dc_(dc), rst_(rst), otherCs_(otherCs),
+        columnOffset_(columnOffset), rowOffset_(rowOffset),
+        orientation_(orientation) {}
+
+  void setOffsets(uint8_t columnOffset, uint8_t rowOffset) {
+    columnOffset_ = columnOffset;
+    rowOffset_ = rowOffset;
+  }
+
+  // Call after begin(). Orientation changes may require new panel offsets.
+  void setOrientation(Orientation orientation) {
+    orientation_ = orientation;
+    commandData(0x36, 0x08 | (static_cast<uint8_t>(orientation_) << 6));
+  }
 
   void begin() {
     pinMode(otherCs_, OUTPUT);
@@ -40,7 +60,7 @@ class ILI9163Display : public Adafruit_GFX {
     commandData2(0xC5, 0x50, 0x63);  // VCOM control
     commandData(0xC7, 0x00);       // VCOM offset
     commandData(0x3A, 0x05);       // RGB565
-    commandData(0x36, 0x08);       // BGR order, portrait
+    setOrientation(orientation_);  // BGR order and panel direction
     command(0x20);                 // INVOFF
     command(0x13);                 // NORON
     delay(10);
@@ -117,10 +137,13 @@ class ILI9163Display : public Adafruit_GFX {
 
  private:
   void setWindow(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1) {
-    uint16_t firstRow = static_cast<uint16_t>(y0) + 32;
-    uint16_t lastRow = static_cast<uint16_t>(y1) + 32;
+    uint16_t firstColumn = static_cast<uint16_t>(x0) + columnOffset_;
+    uint16_t lastColumn = static_cast<uint16_t>(x1) + columnOffset_;
+    uint16_t firstRow = static_cast<uint16_t>(y0) + rowOffset_;
+    uint16_t lastRow = static_cast<uint16_t>(y1) + rowOffset_;
     command(0x2A);  // CASET
-    data(0); data(x0); data(0); data(x1);
+    data(firstColumn >> 8); data(firstColumn & 0xFF);
+    data(lastColumn >> 8); data(lastColumn & 0xFF);
     command(0x2B);  // RASET
     data(firstRow >> 8); data(firstRow & 0xFF);
     data(lastRow >> 8); data(lastRow & 0xFF);
@@ -150,6 +173,8 @@ class ILI9163Display : public Adafruit_GFX {
   }
 
   const uint8_t cs_, dc_, rst_, otherCs_;
+  uint8_t columnOffset_, rowOffset_;
+  Orientation orientation_;
   SPISettings spiSettings_{20000000, MSBFIRST, SPI_MODE0};
 };
 
