@@ -24,7 +24,7 @@
 | 資料表、遷移、考勤與班表 | `database/base.py`、`database/schema.py`、`database/*_manager.py` |
 | 管理介面 | `frontend/src/views/`、`frontend/src/api/index.ts`、`frontend/src/router/index.ts` |
 | Windows 讀卡端與離線補送 | `reader_client.py`、`reader/`、`worker/` |
-| ESP32 韌體 | `firmware/CVTA_Reader/`，另見[韌體指南](../../firmware/GUIDE.md) |
+| ESP32 韌體 | `firmware/CVTA_Reader/`，另見[韌體指南](../../firmware/GUIDE.md)與[更換 LCD 校正](../../firmware/tests/TFT_LCD_TEST/DETAILS.md#更換模組後校正畫面位置) |
 
 桌面端只有以 `--dev-mode` 啟動才顯示「測試模式 → 模擬讀卡」。模擬讀卡只替代讀卡機輸入；後續仍走 `PunchClient._on_card_scanned`、裝置核准檢查、簽章請求與離線補送。操作方法見[設定桌面讀卡端](../operations/desktop-reader.md#測試模式與模擬讀卡)。
 

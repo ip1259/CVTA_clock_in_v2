@@ -10,6 +10,7 @@ Arduino IDE 安裝與新增 ESP32 開發板的步驟，請參考傑森創工的[
 
 1. 在原 Arduino IDE 2 的 **Library Manager** 安裝 **MFRC522 by GithubCommunity**、**ArduinoJson by Benoit Blanchon**（7.x）與 **Adafruit GFX Library**；依提示安裝其相依函式庫。BLE 使用 **esp32 by Espressif Systems** 板套件內附的 BLE 函式庫，無須另裝同名第三方 BLE 函式庫。ILI9163 相容顯示驅動已放在 `CVTA_Reader/ILI9163Display.h`，不需安裝另一個顯示控制器函式庫。板型、燒錄流程與原開發環境相同。
 2. 以 **File → Open** 開啟 `firmware/CVTA_Reader/CVTA_Reader.ino`。保留 `.ino` 與同名 `CVTA_Reader` 資料夾的關係。
+   若更換 LCD 且畫面顛倒或位移，先用[畫面測試](tests/TFT_LCD_TEST/DETAILS.md#更換模組後校正畫面位置)測得方向和偏移值。正式韌體可用 `m`、`o` 指令調整並保存；檔案開頭的 `TFT_ORIENTATION`、`TFT_COLUMN_OFFSET` 與 `TFT_ROW_OFFSET` 只決定尚無儲存設定時的預設值。目前蝦皮購入、實物 PCB 絲印 V1.1 的模組預設為 `Rotate180`、`(2, 3)`；原廣華購入、實物 PCB 絲印 V2 的模組實測值為 `Normal`、`(0, 32)`。
 3. 使用原本的 **NodeMCU-32S 實體開發板**，但在 **Tools → Board** 選 **ESP32 Dev Module**；**Flash Mode 選 DIO**、Flash Size 選 **4 MB**，Port 與上傳速度保持原設定。BLE 加入後，`NodeMCU-32S` 板型固定的 1.25 MB APP 分割區可能不足；`ESP32 Dev Module` 可選較大的分割區，GPIO 接線不變。
 4. 在 **Tools → Partition Scheme** 選 **Huge APP (3MB No OTA/1MB SPIFFS)**。此配置仍有名為 `spiffs` 的資料分割區供 LittleFS 保存離線佇列。此韌體沒有 OTA 更新流程。若選項名稱略有不同，確認為 3 MB APP、保留約 1 MB SPIFFS 的配置；**不要選沒有 SPIFFS 的配置**。
 5. 其餘上傳選項先保留板型預設值。若上傳不穩，再降低 **Upload Speed**。
