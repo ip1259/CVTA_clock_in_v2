@@ -2,13 +2,16 @@
 
 import codecs
 import sys
+import time
+from collections import deque
 
-from PySide6.QtCore import QIODeviceBase, Qt
+from PySide6.QtCore import QIODeviceBase, QSignalBlocker, Qt, QTimer
+from PySide6.QtGui import QWheelEvent
 from PySide6.QtSerialPort import QSerialPort, QSerialPortInfo
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
     QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
-    QScrollArea, QSpinBox, QSplitter, QTabWidget, QVBoxLayout, QWidget,
+    QScrollArea, QSlider, QSplitter, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from esp32_serial_protocol import (
@@ -18,6 +21,32 @@ from esp32_serial_protocol import (
 )
 
 
+class OffsetSlider(QSlider):
+    """Move one offset unit per wheel notch; arrow keys use QSlider's step."""
+
+    def __init__(self):
+        super().__init__(Qt.Orientation.Horizontal)
+        self.setRange(0, 128)
+        self.setSingleStep(1)
+        self.setPageStep(10)
+        self.setTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._wheel_remainder = 0
+
+    def wheelEvent(self, event: QWheelEvent):
+        delta = event.angleDelta().y()
+        if delta:
+            self._wheel_remainder += delta
+            steps = int(self._wheel_remainder / 120)
+            self._wheel_remainder -= steps * 120
+        else:
+            pixel_delta = event.pixelDelta().y()
+            steps = (pixel_delta > 0) - (pixel_delta < 0)
+        if steps:
+            self.setValue(self.value() + steps)
+        event.accept()
+
+
 class Esp32SerialWindow(QMainWindow):
     def __init__(self, serial=None, port_provider=None):
         super().__init__()
@@ -25,6 +54,21 @@ class Esp32SerialWindow(QMainWindow):
         self.port_provider = port_provider or QSerialPortInfo.availablePorts
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self._pending_text = ""
+        self._geometry_generation = 0
+        self._display_queries = deque()
+        self._geometry_known = False
+        self._last_sent_orientation = None
+        self._last_sent_offsets = None
+        self._initial_display_timer = QTimer(self)
+        self._initial_display_timer.setSingleShot(True)
+        self._initial_display_timer.timeout.connect(self._query_initial_display)
+        self._display_refresh_timer = QTimer(self)
+        self._display_refresh_timer.setSingleShot(True)
+        self._display_refresh_timer.setInterval(200)
+        self._display_refresh_timer.timeout.connect(self._finish_geometry_edit)
+        self._periodic_display_timer = QTimer(self)
+        self._periodic_display_timer.setInterval(5000)
+        self._periodic_display_timer.timeout.connect(self._periodic_display)
         self.setWindowTitle("CVTA ESP32 USB 設定工具")
         self.resize(900, 720)
         self.setMinimumSize(600, 480)
@@ -32,6 +76,7 @@ class Esp32SerialWindow(QMainWindow):
         self.serial.readyRead.connect(self._read_serial)
         self.serial.errorOccurred.connect(self._serial_error)
         self.refresh_ports()
+        self._reset_geometry()
         self._set_connected(False)
 
     def _make_ui(self):
@@ -110,29 +155,33 @@ class Esp32SerialWindow(QMainWindow):
         display_layout.addLayout(row)
         layout.addWidget(display_group)
 
-        edit_group = QGroupBox("校正方向與偏移")
-        form = QFormLayout(edit_group)
+        self.edit_group = QGroupBox("校正方向與偏移")
+        form = QFormLayout(self.edit_group)
         self.orientation_combo = QComboBox()
         for label in ("0 · 正常", "1 · 左右鏡像", "2 · 上下鏡像", "3 · 旋轉 180°"):
             self.orientation_combo.addItem(label)
+        self.orientation_combo.currentIndexChanged.connect(self._orientation_changed)
         form.addRow("方向", self.orientation_combo)
-        apply_orientation = QPushButton("套用方向")
-        apply_orientation.clicked.connect(
-            lambda: self.send_command(f"m {self.orientation_combo.currentIndex()}", refresh_display=True))
-        form.addRow("", apply_orientation)
-        self.column_spin = QSpinBox()
-        self.column_spin.setRange(0, 128)
-        self.row_spin = QSpinBox()
-        self.row_spin.setRange(0, 128)
-        form.addRow("水平偏移 column", self.column_spin)
-        form.addRow("垂直偏移 row", self.row_spin)
-        apply_offsets = QPushButton("套用偏移")
-        apply_offsets.clicked.connect(
-            lambda: self.send_command(f"o {self.column_spin.value()} {self.row_spin.value()}",
-                                      refresh_display=True))
-        form.addRow("", apply_offsets)
-        layout.addWidget(edit_group)
-        hint = QLabel("定位框應完整顯示四邊與四色角標，且 TOP 位於上方。設定由韌體保存，請重啟後再讀取確認。")
+        self.column_slider = OffsetSlider()
+        self.column_slider.setAccessibleName("水平偏移 column")
+        self.column_value = QLabel("0")
+        self.column_value.setMinimumWidth(32)
+        column_row = QHBoxLayout()
+        column_row.addWidget(self.column_slider, 1)
+        column_row.addWidget(self.column_value)
+        form.addRow("水平偏移 column", column_row)
+        self.row_slider = OffsetSlider()
+        self.row_slider.setAccessibleName("垂直偏移 row")
+        self.row_value = QLabel("0")
+        self.row_value.setMinimumWidth(32)
+        row_layout = QHBoxLayout()
+        row_layout.addWidget(self.row_slider, 1)
+        row_layout.addWidget(self.row_value)
+        form.addRow("垂直偏移 row", row_layout)
+        self.column_slider.valueChanged.connect(self._offset_changed)
+        self.row_slider.valueChanged.connect(self._offset_changed)
+        layout.addWidget(self.edit_group)
+        hint = QLabel("方向、滑桿拖動、方向鍵及滾輪會立即送出設定。定位框應完整顯示四邊與四色角標，且 TOP 位於上方；重啟後再讀取確認。")
         hint.setWordWrap(True)
         layout.addWidget(hint)
         layout.addStretch()
@@ -251,8 +300,11 @@ class Esp32SerialWindow(QMainWindow):
             return
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self._pending_text = ""
+        self._reset_geometry()
         self._set_connected(True)
         self._append(f"[工具] 已連接 {port} · 115200 baud；等待裝置啟動。")
+        self._initial_display_timer.start(1500)
+        self._periodic_display_timer.start()
 
     def disconnect_port(self, reason="已中斷連線"):
         if self.serial.isOpen():
@@ -261,8 +313,99 @@ class Esp32SerialWindow(QMainWindow):
             self._append(self._pending_text)
         self._pending_text = ""
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self._reset_geometry()
         self._set_connected(False)
         self._append(f"[工具] {reason}。")
+
+    def _reset_geometry(self):
+        self._initial_display_timer.stop()
+        self._display_refresh_timer.stop()
+        self._periodic_display_timer.stop()
+        self._display_queries.clear()
+        self._geometry_generation += 1
+        self._geometry_known = False
+        self._last_sent_orientation = None
+        self._last_sent_offsets = None
+        self.edit_group.setEnabled(False)
+        self.display_label.setText("尚未從裝置讀取")
+
+    def _query_initial_display(self):
+        if self.serial.isOpen() and not self._geometry_known:
+            self.send_command("display")
+
+    def _periodic_display(self):
+        if not self.serial.isOpen() or self._display_refresh_timer.isActive():
+            return
+        self._expire_display_queries()
+        if not self._display_queries:
+            self.send_command("display")
+
+    def _expire_display_queries(self):
+        now = time.monotonic()
+        while self._display_queries and now - self._display_queries[0][1] > 10:
+            self._display_queries.popleft()
+
+    def _orientation_changed(self, index):
+        if self._geometry_known:
+            self._geometry_changed("orientation")
+
+    def _offset_changed(self):
+        self.column_value.setText(str(self.column_slider.value()))
+        self.row_value.setText(str(self.row_slider.value()))
+        if self._geometry_known:
+            self._geometry_changed("offsets")
+
+    def _geometry_changed(self, kind):
+        self._geometry_generation += 1
+        self.display_label.setText("等待裝置確認…")
+        if not self._display_refresh_timer.isActive():
+            if kind == "orientation":
+                self._send_orientation()
+            else:
+                self._send_offsets()
+        if self.serial.isOpen():
+            self._display_refresh_timer.start()
+
+    def _send_orientation(self):
+        orientation = self.orientation_combo.currentIndex()
+        if orientation == self._last_sent_orientation:
+            return True
+        if self.send_command(f"m {orientation}"):
+            self._last_sent_orientation = orientation
+            return True
+        return False
+
+    def _send_offsets(self):
+        offsets = self.column_slider.value(), self.row_slider.value()
+        if offsets == self._last_sent_offsets:
+            return True
+        if self.send_command(f"o {offsets[0]} {offsets[1]}"):
+            self._last_sent_offsets = offsets
+            return True
+        return False
+
+    def _finish_geometry_edit(self):
+        if not self.serial.isOpen():
+            return
+        if self._geometry_known and not (self._send_orientation() and self._send_offsets()):
+            return
+        self.send_command("display")
+
+    def _apply_hardware_geometry(self, geometry):
+        orientation, column, row = geometry
+        with (QSignalBlocker(self.orientation_combo),
+              QSignalBlocker(self.column_slider), QSignalBlocker(self.row_slider)):
+            self.orientation_combo.setCurrentIndex(orientation)
+            self.column_slider.setValue(column)
+            self.row_slider.setValue(row)
+        self.column_value.setText(str(column))
+        self.row_value.setText(str(row))
+        self.display_label.setText(f"方向 {orientation} · 水平 {column} · 垂直 {row}")
+        self._geometry_known = True
+        self._last_sent_orientation = orientation
+        self._last_sent_offsets = column, row
+        self.edit_group.setEnabled(True)
+        self._initial_display_timer.stop()
 
     def _set_connected(self, connected):
         self.connect_button.setText("斷線" if connected else "連接")
@@ -287,15 +430,23 @@ class Esp32SerialWindow(QMainWindow):
             line, self._pending_text = self._pending_text.split("\n", 1)
             line = line.rstrip("\r")
             self._append(line)
+            if line.startswith("Device UUID:") and not self._geometry_known:
+                self._display_queries.clear()
+                self._initial_display_timer.stop()
+                self._query_initial_display()
             geometry = parse_display(line)
             if geometry:
-                self.display_label.setText(
-                    f"方向 {geometry[0]} · 水平 {geometry[1]} · 垂直 {geometry[2]}")
+                self._expire_display_queries()
+                generation = (self._display_queries.popleft()
+                              if self._display_queries else (self._geometry_generation, 0))[0]
+                if (generation == self._geometry_generation and
+                        not self._display_refresh_timer.isActive()):
+                    self._apply_hardware_geometry(geometry)
         if len(self._pending_text) > 8192:
             self._append(self._pending_text[:8192] + " [輸出過長，已截斷]")
             self._pending_text = ""
 
-    def send_command(self, command, *, refresh_display=False):
+    def send_command(self, command):
         if not self.serial.isOpen():
             QMessageBox.warning(self, "尚未連接", "請先連接 ESP32 的 COM 埠。")
             return False
@@ -317,9 +468,9 @@ class Esp32SerialWindow(QMainWindow):
             self.disconnect_port("指令未完整寫入，請重新連接並確認裝置狀態")
             return False
         self._append(f"> {visible_command(command)}")
-        if refresh_display:
-            # Serial is ordered, so the firmware processes this after the setting command.
-            self.send_command("display")
+        if command == "display":
+            self._expire_display_queries()
+            self._display_queries.append((self._geometry_generation, time.monotonic()))
         return True
 
     def _send_raw(self):
@@ -329,6 +480,12 @@ class Esp32SerialWindow(QMainWindow):
             return
         if self.send_command(command):
             self.raw_edit.clear()
+            if command.startswith(("m ", "o ")):
+                self._geometry_generation += 1
+                self._geometry_known = False
+                self.edit_group.setEnabled(False)
+                self.display_label.setText("等待裝置確認…")
+                self._display_refresh_timer.start()
 
     def _save_wifi(self):
         try:
@@ -370,6 +527,9 @@ class Esp32SerialWindow(QMainWindow):
         self.log.clear()
 
     def closeEvent(self, event):
+        self._initial_display_timer.stop()
+        self._display_refresh_timer.stop()
+        self._periodic_display_timer.stop()
         if self.serial.isOpen():
             self.serial.close()
         super().closeEvent(event)

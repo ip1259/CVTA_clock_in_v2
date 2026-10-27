@@ -4,8 +4,10 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QPoint, QPointF, Qt, Signal
+from PySide6.QtGui import QWheelEvent
 from PySide6.QtSerialPort import QSerialPort
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from esp32_serial_protocol import (
@@ -99,14 +101,73 @@ class GuiTests(unittest.TestCase):
         self.window.toggle_connection()
         self.assertTrue(self.serial.opened)
         self.assertEqual(self.serial.baud, 115200)
-        self.assertTrue(self.window.send_command("m 3", refresh_display=True))
-        self.assertEqual(self.serial.writes, [b"m 3\n", b"display\n"])
+        self.assertFalse(self.window.edit_group.isEnabled())
+        self.window._query_initial_display()
+        self.assertEqual(self.serial.writes, [b"display\n"])
         self.serial.feed(b"[status] REA")
         self.assertNotIn("[status] READY", self.window.log.toPlainText())
         self.serial.feed(b"DY\nDisplay: m 3, o 2")
         self.serial.feed(b" 3 (0=normal)\n")
         self.assertEqual(self.window.display_label.text(), "方向 3 · 水平 2 · 垂直 3")
+        self.assertEqual(self.window.orientation_combo.currentIndex(), 3)
+        self.assertEqual(self.window.column_slider.value(), 2)
+        self.assertEqual(self.window.row_slider.value(), 3)
+        self.assertTrue(self.window.edit_group.isEnabled())
+        self.assertEqual(self.serial.writes, [b"display\n"])
         self.assertIn("[status] READY", self.window.log.toPlainText())
+
+    def test_live_orientation_and_offset_coalesce_then_sync(self):
+        self.window.toggle_connection()
+        self.window._query_initial_display()
+        self.serial.feed(b"Display: m 0, o 0 32 (0=normal)\n")
+        self.window.orientation_combo.setCurrentIndex(3)
+        self.assertEqual(self.serial.writes[-1], b"m 3\n")
+        self.window.column_slider.setValue(1)
+        self.window.column_slider.setValue(2)
+        self.window.row_slider.setValue(3)
+        # Continuous adjustments are coalesced while the first command is in flight.
+        self.assertEqual(self.serial.writes, [b"display\n", b"m 3\n"])
+        self.assertEqual(self.window.column_value.text(), "2")
+        QTest.qWait(240)
+        self.assertEqual(self.serial.writes[-2:], [b"o 2 3\n", b"display\n"])
+        self.serial.feed(b"Display: m 3, o 2 3 (0=normal)\n")
+        self.assertEqual(self.window.display_label.text(), "方向 3 · 水平 2 · 垂直 3")
+
+    def test_arrow_wheel_and_stale_reply(self):
+        self.window.toggle_connection()
+        self.window._query_initial_display()
+        self.serial.feed(b"Display: m 0, o 0 0 (0=normal)\n")
+        QTest.keyClick(self.window.column_slider, Qt.Key.Key_Right)
+        self.assertEqual(self.window.column_slider.value(), 1)
+        self.assertEqual(self.serial.writes[-1], b"o 1 0\n")
+        wheel = QWheelEvent(QPointF(0, 0), QPointF(0, 0), QPoint(0, 0),
+                            QPoint(0, 120), Qt.MouseButton.NoButton,
+                            Qt.KeyboardModifier.NoModifier,
+                            Qt.ScrollPhase.ScrollUpdate, False)
+        self.window.column_slider.wheelEvent(wheel)
+        self.assertEqual(self.window.column_slider.value(), 2)
+        # A response to an older display query must not pull a moving slider back.
+        self.serial.feed(b"Display: m 0, o 0 0 (0=normal)\n")
+        self.assertEqual(self.window.column_slider.value(), 2)
+        QTest.qWait(240)
+        self.assertEqual(self.serial.writes[-2:], [b"o 2 0\n", b"display\n"])
+        # The device report is authoritative if it rejected a requested value.
+        self.serial.feed(b"Display: m 0, o 1 0 (0=normal)\n")
+        self.assertEqual(self.window.column_slider.value(), 1)
+        self.assertEqual(self.window.column_value.text(), "1")
+        self.assertEqual(self.serial.writes[-1], b"display\n")
+
+    def test_periodic_sync_picks_up_external_hardware_change(self):
+        self.window.toggle_connection()
+        self.window._query_initial_display()
+        self.serial.feed(b"Display: m 0, o 0 32 (0=normal)\n")
+        self.window._periodic_display()
+        self.assertEqual(self.serial.writes[-1], b"display\n")
+        self.serial.feed(b"Display: m 3, o 2 3 (0=normal)\n")
+        self.assertEqual(self.window.orientation_combo.currentIndex(), 3)
+        self.assertEqual(self.window.column_slider.value(), 2)
+        self.assertEqual(self.window.row_slider.value(), 3)
+        self.assertEqual(self.serial.writes, [b"display\n", b"display\n"])
 
     def test_split_utf8_and_failed_open(self):
         self.serial.open_result = False
